@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:;">
+  <title>Orgtree</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-tree">🌳</span>
+        <h1>Orgtree</h1>
+        <span class="brand-sub">Pay once. Own your org chart forever.</span>
+      </div>
+
+      <div class="topbar-controls">
+        <input type="search" id="search" placeholder="Search people…" autocomplete="off">
+        <select id="dept-filter">
+          <option value="">All departments</option>
+        </select>
+        <button class="btn ghost" id="btn-reset-view" title="Return to full tree">Full tree</button>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="btn ghost" id="btn-import-csv" title="Bulk-load a roster from CSV">Import CSV</button>
+        <button class="btn ghost" id="btn-export-csv" title="Export roster as CSV">Export CSV</button>
+        <button class="btn ghost" id="btn-export-png" title="Export the visible chart as PNG">Export PNG</button>
+        <button class="btn primary" id="btn-add">+ Add Person</button>
+      </div>
+    </header>
+
+    <main class="view">
+      <aside class="legend" id="legend"></aside>
+      <div class="chart-wrap" id="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div class="empty hidden" id="empty">
+          <div class="big">🌳</div>
+          <h2>No one on the roster yet</h2>
+          <p>Add your first person, or import a CSV to bulk-load an existing roster.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Person editor modal -->
+  <div class="modal-backdrop hidden" id="modal">
+    <div class="modal">
+      <h2 id="modal-title">Add Person</h2>
+      <div class="form">
+        <label>Name
+          <input type="text" id="f-name" placeholder="Jordan Rivera" maxlength="80">
+        </label>
+        <label>Title
+          <input type="text" id="f-title" placeholder="Engineering Manager" maxlength="80">
+        </label>
+        <label>Department
+          <input type="text" id="f-department" placeholder="Engineering" maxlength="60" list="dept-list">
+          <datalist id="dept-list"></datalist>
+        </label>
+        <label>Email
+          <input type="email" id="f-email" placeholder="jordan@company.com" maxlength="120">
+        </label>
+        <label>Manager
+          <select id="f-manager">
+            <option value="">— No manager (root) —</option>
+          </select>
+        </label>
+        <label>Photo <span class="hint">(optional — local file path reference)</span>
+          <div class="photo-row">
+            <input type="text" id="f-photo" placeholder="No photo selected" readonly>
+            <button class="btn ghost small" id="btn-pick-photo" type="button">Choose…</button>
+            <button class="btn ghost small" id="btn-clear-photo" type="button">Clear</button>
+          </div>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn danger hidden" id="btn-delete">Delete</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="btn-cancel">Cancel</button>
+        <button class="btn primary" id="btn-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CSV import result modal -->
+  <div class="modal-backdrop hidden" id="import-modal">
+    <div class="modal">
+      <h2>Import result</h2>
+      <div id="import-summary" class="import-summary"></div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button class="btn primary" id="btn-import-close">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="../src/tree.js"></script>
+  <script src="../src/csv.js"></script>
+  <script src="layout.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
