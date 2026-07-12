@@ -87,3 +87,7 @@ Everything stays on your machine. Orgtree makes **no network calls at all**. You
 ## License
 
 [MIT](LICENSE) © 2026 Ben (bensblueprints)
+
+## macOS build
+
+See [MAC-BUILD.md](MAC-BUILD.md). Quickest path: GitHub **Actions** tab -> run the **Mac Build** (`mac-build.yml`) workflow to get a downloadable `.dmg` (unsigned - right-click -> Open on first launch).
