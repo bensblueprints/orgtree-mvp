@@ -12,7 +12,7 @@ Pingboard charges **$99/month** to draw boxes and lines. Orgtree is **$19 once**
 
 Don't want to touch a terminal? Grab the packaged Windows installer (and support development):
 
-**→ [Get Orgtree on Whop](https://whop.com/onetime-suite)** — pay once, own it forever.
+**→ [Get Orgtree on Whop](https://whop.com/benjisaiempire/orgtree)** — pay once, own it forever.
 
 ## Features
 
