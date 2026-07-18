@@ -1,5 +1,9 @@
 # 🌳 Orgtree
 
+## Demo
+
+VIDEO-PLACEHOLDER
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 **The desktop org chart builder you buy once and own forever.** Auto-layout tree, department color-coding, drill-down views, search, and CSV import/export — 100% local, zero subscription, zero cloud, zero telemetry.
