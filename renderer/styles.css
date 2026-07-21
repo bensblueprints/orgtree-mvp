@@ -134,7 +134,7 @@ body {
 .legend-row:hover { background: var(--surface-2); }
 .legend-row .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
-.chart-wrap { position: relative; flex: 1; overflow: auto; background: var(--bg); }
+.chart-wrap { position: relative; flex: 1; overflow: auto; background: var(--bg); cursor: grab; }
 #chart { display: block; }
 
 .empty {

@@ -699,6 +699,45 @@ canvas.addEventListener('mousedown', (e) => {
   }
 });
 
+// ---------- pan by dragging empty space ----------
+
+const pan = { candidate: null, active: false };
+
+chartWrap.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest('.zoom-pill') || e.target.closest('.empty')) return;
+  // A press on a card starts a re-parent drag, not a pan.
+  if (e.target === canvas && hitTest(e.clientX, e.clientY)) return;
+  pan.candidate = { sx: e.clientX, sy: e.clientY, sl: chartWrap.scrollLeft, st: chartWrap.scrollTop };
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!pan.candidate) return;
+  const dx = e.clientX - pan.candidate.sx;
+  const dy = e.clientY - pan.candidate.sy;
+  if (!pan.active && Math.abs(dx) + Math.abs(dy) > 4) {
+    pan.active = true;
+    chartWrap.style.cursor = 'grabbing';
+    canvas.style.cursor = 'grabbing';
+  }
+  if (pan.active) {
+    chartWrap.scrollLeft = pan.candidate.sl - dx;
+    chartWrap.scrollTop = pan.candidate.st - dy;
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (pan.active) {
+    // A real pan is not a click — don't clear the selection afterwards.
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 0);
+  }
+  pan.candidate = null;
+  pan.active = false;
+  chartWrap.style.cursor = '';
+  canvas.style.cursor = '';
+});
+
 window.addEventListener('mousemove', (e) => {
   if (drag.candidate && !drag.active) {
     if (Math.abs(e.clientX - drag.candidate.sx) + Math.abs(e.clientY - drag.candidate.sy) > 7) {
@@ -801,7 +840,7 @@ canvas.addEventListener('mousemove', (e) => {
     if (drag.active) return;
     const hit = hitTest(cx, cy);
     const newHover = hit && hit.type === 'node' ? hit.pos.id : null;
-    canvas.style.cursor = hit ? 'pointer' : 'default';
+    canvas.style.cursor = hit ? 'pointer' : 'grab';
     if (newHover !== hoverId) {
       hoverId = newHover;
       if (lastLayout) drawTree(lastLayout);
