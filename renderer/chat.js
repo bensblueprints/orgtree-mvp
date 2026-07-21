@@ -168,6 +168,15 @@
   }
 
   function handleServer(m) {
+    // Social Mode messages are handled by office.js
+    if (m.type === 'pos' || m.type === 'rtc') {
+      if (window.__wholeteamOffice) window.__wholeteamOffice.onMessage(m);
+      return;
+    }
+    if (m.type === 'status') {
+      if (window.__wholeteamOffice) window.__wholeteamOffice.onMessage(m);
+      return;
+    }
     if (m.type === 'roster') {
       C.roster = m.roster || [];
       C.channels = m.channels || [];
@@ -227,6 +236,8 @@
     if (m.type === 'presence') {
       C.online = m.online || [];
       C.working = m.working || [];
+      C.busy = m.busy || [];
+      if (window.__wholeteamOffice) window.__wholeteamOffice.onPresence(C);
       publishStatus();
       if (['list', 'convo', 'library', 'profile'].includes(C.view)) render();
       return;
@@ -964,6 +975,19 @@
   }
 
   chatBtn.addEventListener('click', togglePanel);
+
+  // Bridge for Social Mode (office.js)
+  window.__wholeteamChat = {
+    send: sendServer,
+    getState: () => C,
+    openDm: (personId) => {
+      if (!C.you || personId === C.you.id) return;
+      C.open = true;
+      openChannel(dmChannel(C.you.id, personId));
+      updateBadge();
+    },
+    openPanel: () => { if (!C.open) togglePanel(); },
+  };
 
   (async function initChat() {
     try {

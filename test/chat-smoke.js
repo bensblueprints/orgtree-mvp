@@ -151,6 +151,34 @@ const roster = [
     await s9.stop();
   }
 
+  console.log('\n— Social Mode relays: pos, door status, rtc signaling —');
+  {
+    const s10 = await createChatServer({ port: PORT, roster });
+    const w1 = await client(PORT); await sleep(80);
+    w1.send({ type: 'hello', personId: 'ada' }); await sleep(80);
+    const w2 = await client(PORT); await sleep(80);
+    w2.send({ type: 'hello', personId: 'vic' }); await sleep(120);
+
+    w1.send({ type: 'pos', x: 120, y: 240 });
+    await sleep(150);
+    ok(w2.inbox.some(m => m.type === 'pos' && m.personId === 'ada' && m.x === 120 && m.y === 240), 'avatar positions are relayed to everyone');
+
+    w1.send({ type: 'status', busy: true });
+    await sleep(150);
+    ok(w2.inbox.some(m => m.type === 'status' && m.personId === 'ada' && m.busy === true), 'door-closed status is broadcast');
+
+    w1.send({ type: 'rtc', to: 'vic', data: { sdp: { type: 'offer', fake: true } } });
+    await sleep(150);
+    ok(w2.inbox.some(m => m.type === 'rtc' && m.from === 'ada' && m.data.sdp), 'rtc signaling reaches only the addressed peer');
+    const w3snoop = await client(PORT); await sleep(80);
+    w3snoop.send({ type: 'hello', personId: 'sam' }); await sleep(100);
+    w1.send({ type: 'rtc', to: 'vic', data: { sdp: { type: 'offer' } } });
+    await sleep(150);
+    ok(!w3snoop.inbox.some(m => m.type === 'rtc'), 'third parties never receive others\' rtc handshakes');
+
+    await s10.stop();
+  }
+
   console.log('\n— deleted members leave timesheets + get disconnected —');
   {
     const s8 = await createChatServer({ port: PORT, roster });

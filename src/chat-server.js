@@ -206,11 +206,12 @@ function createChatServer({
     ...departments.map(d => ({ id: 'dept:' + d, label: d })),
   ];
 
-  const conns = new Map(); // ws -> {personId, name}
+  const conns = new Map(); // ws -> {personId, name, busy}
   const online = () => [...conns.values()].map(c => c.personId);
   // Everyone can see WHO is working; hours/activity stay admin-and-self only.
   const working = () => minimalRoster.filter(p => openSession(p.id)).map(p => p.id);
-  const presenceMsg = () => ({ type: 'presence', online: online(), working: working() });
+  const busyIds = () => [...conns.values()].filter(c => c.busy).map(c => c.personId);
+  const presenceMsg = () => ({ type: 'presence', online: online(), working: working(), busy: busyIds() });
 
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -437,6 +438,32 @@ function createChatServer({
           type: 'fileData', id: entry.id, name: entry.name, channel: entry.channel,
           reason: m.reason || 'download', data: buf.toString('base64'),
         });
+        return;
+      }
+
+      // ---- Social Mode (virtual office): ephemeral relays, nothing persisted ----
+
+      if (m.type === 'pos') {
+        // avatar movement in the virtual office
+        const x = Number(m.x), y = Number(m.y);
+        if (!isFinite(x) || !isFinite(y)) return;
+        broadcast({ type: 'pos', personId: info.personId, x, y });
+        return;
+      }
+
+      if (m.type === 'status') {
+        // door open/closed (do-not-disturb)
+        info.busy = !!m.busy;
+        broadcast({ type: 'status', personId: info.personId, busy: info.busy });
+        return;
+      }
+
+      if (m.type === 'rtc') {
+        // WebRTC signaling relay for proximity voice — data is opaque
+        const target = String(m.to || '');
+        for (const [ws2, info2] of conns) {
+          if (info2.personId === target) send(ws2, { type: 'rtc', from: info.personId, data: m.data });
+        }
         return;
       }
 

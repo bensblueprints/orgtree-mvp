@@ -134,6 +134,11 @@ function createWindow() {
             await win.webContents.executeJavaScript(
               `window.__orgtreeChatMode=${JSON.stringify(process.env.ORGTREE_SHOT_CHAT)}; window.__orgtreeChatDemo && window.__orgtreeChatDemo()`, true);
           }
+          if (process.env.ORGTREE_SHOT_SOCIAL) {
+            await win.webContents.executeJavaScript(
+              'document.getElementById("btn-social").click()', true);
+            await new Promise(r => setTimeout(r, 800));
+          }
           win.webContents.invalidate();
           setTimeout(async () => {
             let img = await win.capturePage();
