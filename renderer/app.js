@@ -1070,6 +1070,33 @@ $('menu-settings').querySelector('.menu-pop').addEventListener('click', async (e
     openSmtpModal();
   } else if (a === 'rules') {
     openRulesModal();
+  } else if (a === 'clearSample') {
+    const sample = people.filter(p => p.id.startsWith('sample-'));
+    if (!sample.length) { toast('No sample data on this chart'); return; }
+    pushUndo();
+    people = people.filter(p => !p.id.startsWith('sample-'));
+    const alive = new Set(people.map(p => p.id));
+    for (const p of people) {
+      if (p.managerId && !alive.has(p.managerId)) p.managerId = null;
+      if (p.dottedManagerId && !alive.has(p.dottedManagerId)) p.dottedManagerId = null;
+    }
+    collapsed = new Set([...collapsed].filter(id => alive.has(id)));
+    if (rootId && !alive.has(rootId)) rootId = null;
+    if (selectedId && !alive.has(selectedId)) { selectedId = null; closeDrawer(); }
+    await persist();
+    render();
+    toast(`Removed ${sample.length} sample ${sample.length === 1 ? 'person' : 'people'} (Ctrl+Z to undo)`);
+  } else if (a === 'clearAll') {
+    if (!people.length) { toast('Chart is already empty'); return; }
+    if (!confirm(`Clear the entire chart? All ${people.length} people will be removed.\n\nYou can undo with Ctrl+Z until you close the app.`)) return;
+    pushUndo();
+    people = [];
+    collapsed = new Set();
+    rootId = null; deptFilter = '';
+    selectedId = null; closeDrawer();
+    await persist();
+    render();
+    toast('Chart cleared (Ctrl+Z to undo)');
   }
 });
 

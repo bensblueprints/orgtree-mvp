@@ -1,0 +1,57 @@
+{
+  "schema": 2,
+  "app": "orgtree",
+  "people": [
+    {
+      "id": "wz-mruh4h6k-0",
+      "name": "Benjamin Boyce",
+      "title": "",
+      "department": "Sales",
+      "email": "ben@advancedmarketing.co",
+      "phone": "",
+      "location": "",
+      "startDate": "",
+      "salary": null,
+      "notes": "",
+      "custom": {},
+      "isOpenRole": false,
+      "managerId": null,
+      "dottedManagerId": null,
+      "photo": "",
+      "timezone": "",
+      "workHours": "",
+      "pinHash": ""
+    },
+    {
+      "id": "wz-mruh4h6k-1",
+      "name": "Hreday Sagar Chakraborty",
+      "title": "",
+      "department": "Sales",
+      "email": "",
+      "phone": "",
+      "location": "",
+      "startDate": "",
+      "salary": null,
+      "notes": "",
+      "custom": {},
+      "isOpenRole": false,
+      "managerId": "wz-mruh4h6k-0",
+      "dottedManagerId": null,
+      "photo": "",
+      "timezone": "",
+      "workHours": "",
+      "pinHash": ""
+    }
+  ],
+  "settings": {
+    "collapsed": [],
+    "showDeptPill": true,
+    "showHeadcount": true,
+    "showCost": false,
+    "condRules": [],
+    "activeScenarioId": null,
+    "companyName": "Advanced Marketing",
+    "onboarded": true
+  },
+  "scenarios": []
+}
