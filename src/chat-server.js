@@ -208,6 +208,9 @@ function createChatServer({
 
   const conns = new Map(); // ws -> {personId, name}
   const online = () => [...conns.values()].map(c => c.personId);
+  // Everyone can see WHO is working; hours/activity stay admin-and-self only.
+  const working = () => minimalRoster.filter(p => openSession(p.id)).map(p => p.id);
+  const presenceMsg = () => ({ type: 'presence', online: online(), working: working() });
 
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -273,12 +276,12 @@ function createChatServer({
         }
         conns.set(ws, { personId: person.id, name: person.name, admin: ws._orgtreeAdmin });
         send(ws, {
-          type: 'welcome', you: person, channels, online: online(), retentionDays,
+          type: 'welcome', you: person, channels, online: online(), working: working(), retentionDays,
           admin: ws._orgtreeAdmin,
           pinSet: !!pinHashes.get(person.id),
           clockedIn: !!openSession(person.id),
         });
-        broadcast({ type: 'presence', online: online() });
+        broadcast(presenceMsg());
         return;
       }
 
@@ -372,12 +375,14 @@ function createChatServer({
           persistTimesheet();
         }
         send(ws, { type: 'clock', status: 'in', summary: summarize(info.personId) });
+        broadcast(presenceMsg()); // everyone sees who's working
         return;
       }
 
       if (m.type === 'clockOut') {
         closeSession(info.personId);
         send(ws, { type: 'clock', status: 'out', summary: summarize(info.personId) });
+        broadcast(presenceMsg());
         return;
       }
 
@@ -463,7 +468,7 @@ function createChatServer({
     ws.on('close', () => {
       const info = conns.get(ws);
       if (info) closeSession(info.personId); // disconnect = automatic clock-out
-      if (conns.delete(ws)) broadcast({ type: 'presence', online: online() });
+      if (conns.delete(ws)) broadcast(presenceMsg());
     });
   });
 

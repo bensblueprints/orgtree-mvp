@@ -158,7 +158,8 @@
     if (C.ws) { const w = C.ws; C.ws = null; try { w.close(); } catch (_) {} }
     C.you = null; C.view = 'setup'; C.current = null;
     C.msgs = new Map(); C.unread = new Map(); C.library = new Map();
-    C.online = []; C.clockedIn = false; C.admin = false;
+    C.online = []; C.clockedIn = false; C.admin = false; C.timesheets = [];
+    publishStatus();
     if (rerender) { render(); updateBadge(); }
   }
 
@@ -185,6 +186,7 @@
     if (m.type === 'welcome') {
       C.you = m.you;
       C.online = m.online || [];
+      C.working = m.working || [];
       C.admin = !!m.admin;
       C.pinSet = !!m.pinSet;
       C.clockedIn = !!m.clockedIn;
@@ -224,6 +226,8 @@
     }
     if (m.type === 'presence') {
       C.online = m.online || [];
+      C.working = m.working || [];
+      publishStatus();
       if (['list', 'convo', 'library', 'profile'].includes(C.view)) render();
       return;
     }
@@ -292,6 +296,7 @@
       } else if (m.entries && m.entries.length === 1) {
         C.mySummary = m.entries[0];
       }
+      if (changed) publishStatus();
       if (changed && clockMenuOpen()) renderClockMenu();
       if (changed && C.view === 'list') render();
       return;
@@ -579,8 +584,10 @@
       html += chRow(ch.id, ch.id === 'org' ? 'Everyone' : ch.label, ch.id === 'org' ? 'The whole company' : ch.label + ' team', false);
     }
     html += '<div class="chat-section">Direct messages</div>';
+    const workingSet = new Set(C.working || []);
     for (const p of C.roster.filter(p => p.id !== C.you.id)) {
       const bits = [p.title || '—'];
+      if (workingSet.has(p.id)) bits.unshift('working now');
       if (p.timezone) {
         try {
           bits.push(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: p.timezone }) + ' local');
@@ -863,6 +870,19 @@
   function updateClockIndicator() {
     const el = $('clock-ind');
     if (el) el.classList.toggle('hidden', !C.clockedIn);
+    publishStatus();
+  }
+
+  /** Share online/clocked-in status with the chart so cards can show live
+   *  presence dots on avatars. */
+  function publishStatus() {
+    // Server broadcasts the working set to everyone; admin timesheets and own
+    // clock state fill any gaps between presence pushes.
+    const clockedIn = new Set(C.working || []);
+    for (const t of C.timesheets) if (t.clockedIn) clockedIn.add(t.personId);
+    if (C.you && C.clockedIn) clockedIn.add(C.you.id);
+    window.__wholeteamStatus = { online: new Set(C.online), clockedIn };
+    if (window.__wholeteamStatusChanged) window.__wholeteamStatusChanged();
   }
 
   let lastTsReq = 0;

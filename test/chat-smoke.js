@@ -131,6 +131,26 @@ const roster = [
     await s7.stop();
   }
 
+  console.log('\n— everyone sees who is working (clocked-in broadcast) —');
+  {
+    const s9 = await createChatServer({ port: PORT, roster });
+    const w1 = await client(PORT); await sleep(80);
+    w1.send({ type: 'hello', personId: 'vic' }); await sleep(80);
+    const w2 = await client(PORT); await sleep(80);
+    w2.send({ type: 'hello', personId: 'sam' }); await sleep(120);
+
+    w1.send({ type: 'clockIn', pin: '4821' });
+    await sleep(200);
+    const seen = w2.inbox.filter(m => m.type === 'presence').pop();
+    ok(seen.working && seen.working.includes('vic'), 'a non-admin colleague sees Vic in the working set when he clocks in');
+    w1.send({ type: 'clockOut' });
+    await sleep(200);
+    const after = w2.inbox.filter(m => m.type === 'presence').pop();
+    ok(!after.working.includes('vic'), 'clocking out removes Vic from the broadcast working set');
+    ok(!w2.inbox.some(m => m.type === 'presence' && m.entries), 'presence broadcasts never carry hours or activity data');
+    await s9.stop();
+  }
+
   console.log('\n— deleted members leave timesheets + get disconnected —');
   {
     const s8 = await createChatServer({ port: PORT, roster });

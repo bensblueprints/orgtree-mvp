@@ -118,6 +118,12 @@ async function refreshFromDisk() {
   render();
 }
 
+// chat.js publishes live online/clocked-in sets; repaint cards when they change
+window.__wholeteamStatusChanged = () => {
+  if (lastLayout) drawTree(lastLayout);
+  if (selectedId) syncDrawer();
+};
+
 if (window.orgtree.onExternalChange) {
   window.orgtree.onExternalChange(() => {
     // Skip while the editor is open so the admin's in-progress edit wins.
@@ -483,6 +489,21 @@ function drawNode(pos, t) {
   const avX = pos.x + 14;
   const avY = pos.y + (pos.h - av) / 2;
   drawAvatar(p, avX, avY, av, color, t);
+
+  // live status dot on the avatar: green = clocked in, gray = online in chat
+  const status = window.__wholeteamStatus;
+  if (status) {
+    let dotColor = null;
+    if (status.clockedIn.has(p.id)) dotColor = '#22c55e';
+    else if (status.online.has(p.id)) dotColor = '#94a3b8';
+    if (dotColor) {
+      const dx = avX + av - 5, dy = avY + av - 5;
+      ctx.beginPath(); ctx.arc(dx, dy, 6.5, 0, Math.PI * 2);
+      ctx.fillStyle = t.cardBg; ctx.fill();
+      ctx.beginPath(); ctx.arc(dx, dy, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = dotColor; ctx.fill();
+    }
+  }
 
   // text block
   const textX = avX + av + 12;
@@ -927,6 +948,12 @@ function syncDrawer() {
     : '';
 
   let html = '';
+  const status = window.__wholeteamStatus;
+  if (status && status.clockedIn.has(p.id)) {
+    html += '<span class="drawer-badge" style="background:#dcfce7;color:#15803d">● CLOCKED IN</span>';
+  } else if (status && status.online.has(p.id)) {
+    html += '<span class="drawer-badge" style="background:#f0f3f8;color:#475467">● ONLINE</span>';
+  }
   if (p.isOpenRole) {
     html += `<span class="drawer-badge" style="background:${color}22;color:${color}">OPEN ROLE — HIRING</span>`;
   }
