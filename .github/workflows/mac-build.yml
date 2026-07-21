@@ -22,9 +22,39 @@ on:
       - "v*"
 
 permissions:
-  contents: write # needed to attach the DMG to a release
+  contents: write # needed to attach installers to a release
 
 jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build Admin installer
+        run: npm run dist
+      - name: Build Member installer
+        run: npm run dist:member
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            dist/*.exe
+            dist-member/*.exe
+          if-no-files-found: error
+      - name: Publish installers to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.exe
+            dist-member/*.exe
+
   build-mac:
     runs-on: macos-latest
     steps:
@@ -81,10 +111,11 @@ jobs:
             dist-member/*.dmg
           if-no-files-found: error
 
-      - name: Attach DMGs to release
-        if: github.event_name == 'release'
+      - name: Publish DMGs to the release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             dist/*.dmg
             dist-member/*.dmg
