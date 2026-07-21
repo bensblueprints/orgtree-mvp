@@ -331,7 +331,12 @@ body {
   display: inline-block; font-size: 11px; font-weight: 700; border-radius: 8px;
   padding: 3px 8px; margin-top: 4px;
 }
-.drawer-actions { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.drawer-actions {
+  display: flex; gap: 6px; padding: 12px 14px; border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.drawer-actions .btn { padding: 0 10px; }
+.drawer-actions .spacer { flex: 1; min-width: 4px; }
 
 /* ---------- editor grid + textarea ---------- */
 .modal.wide { width: 680px; }
