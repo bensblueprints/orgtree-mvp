@@ -191,12 +191,15 @@ function createChatServer({
   }
 
   // ----- roster / channels -----
-  const minimalRoster = roster
-    .filter(p => !p.isOpenRole)
-    .map(p => ({
-      id: p.id, name: p.name, title: p.title || '', department: p.department || '',
-      timezone: p.timezone || '', workHours: p.workHours || '',
-    }));
+  function buildMinimalRoster(r) {
+    return r
+      .filter(p => !p.isOpenRole)
+      .map(p => ({
+        id: p.id, name: p.name, title: p.title || '', department: p.department || '',
+        timezone: p.timezone || '', workHours: p.workHours || '',
+      }));
+  }
+  let minimalRoster = buildMinimalRoster(roster);
   const departments = [...new Set(minimalRoster.map(p => p.department).filter(Boolean))].sort();
   const channels = [
     { id: 'org', label: 'Everyone' },
@@ -471,6 +474,26 @@ function createChatServer({
         port,
         retentionDays,
         clientCount: () => conns.size,
+        /** Host chart changed (person deleted/edited/added): refresh the live
+         *  roster, kick connections for removed people, close their clock
+         *  sessions, and push fresh timesheets to admins immediately. */
+        updateRoster: (newRoster) => {
+          minimalRoster = buildMinimalRoster(newRoster || []);
+          pinHashes.clear();
+          for (const p of newRoster || []) pinHashes.set(p.id, p.pinHash || null);
+          const validIds = new Set(minimalRoster.map(p => p.id));
+          for (const [ws, info] of conns) {
+            if (!validIds.has(info.personId)) {
+              closeSession(info.personId);
+              try { ws.close(); } catch (_) { /* gone */ }
+            }
+          }
+          for (const [ws, info] of conns) {
+            if (info.admin && validIds.has(info.personId)) {
+              send(ws, { type: 'timesheet', entries: minimalRoster.map(p => summarize(p.id)) });
+            }
+          }
+        },
         stop: () => new Promise((r) => {
           clearInterval(pruneTimer);
           clearTimeout(saveTimer);

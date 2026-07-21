@@ -182,7 +182,11 @@ function createWindow() {
 
 ipcMain.handle('data:load', () => ({ data: loadCurrent(), fileName: docLabel(), filePath: currentFile }));
 ipcMain.handle('data:save', (_e, data) => {
-  saveCurrent(store.normalize(data));
+  const normalized = store.normalize(data);
+  saveCurrent(normalized);
+  // Keep a running chat server in sync with the chart (deleted members must
+  // drop out of timesheets and lose their connection immediately).
+  if (chatServer && chatServer.updateRoster) chatServer.updateRoster(normalized.people);
   return true;
 });
 

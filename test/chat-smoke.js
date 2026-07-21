@@ -131,6 +131,34 @@ const roster = [
     await s7.stop();
   }
 
+  console.log('\n— deleted members leave timesheets + get disconnected —');
+  {
+    const s8 = await createChatServer({ port: PORT, roster });
+    const admin = await client(PORT); await sleep(80);
+    admin.send({ type: 'hello', personId: 'ada' }); await sleep(80);
+    const emp = await client(PORT); await sleep(80);
+    emp.send({ type: 'hello', personId: 'vic' }); await sleep(120);
+
+    admin.send({ type: 'timesheet' }); await sleep(120);
+    const before = admin.inbox.filter(m => m.type === 'timesheet').pop();
+    ok(before.entries.some(e => e.personId === 'vic'), 'before deletion: Vic appears in admin timesheets');
+
+    let empClosed = false;
+    emp.ws.on('close', () => { empClosed = true; });
+    s8.updateRoster(roster.filter(p => p.id !== 'vic')); // admin deleted Vic on the chart
+    await sleep(250);
+
+    const pushed = admin.inbox.filter(m => m.type === 'timesheet').pop();
+    ok(!pushed.entries.some(e => e.personId === 'vic'), 'after deletion: Vic is gone from the pushed admin timesheets');
+    ok(empClosed, 'after deletion: Vic\'s connection is closed by the server');
+
+    const ghost = await client(PORT); await sleep(80);
+    ghost.send({ type: 'hello', personId: 'vic' }); await sleep(120);
+    ok(ghost.inbox.some(m => m.type === 'error' && m.error === 'unknown-person'), 'deleted member cannot reconnect');
+
+    await s8.stop();
+  }
+
   console.log('\n— restart: history survives —');
   const server2 = await createChatServer({ port: PORT, roster, storeFile });
   const d = await client(PORT);
