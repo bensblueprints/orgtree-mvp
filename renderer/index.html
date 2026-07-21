@@ -2,53 +2,240 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:;">
-  <title>Orgtree</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; connect-src 'self' ws:;">
+  <title>WholeTeam</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Inline SVG icon sprite (Lucide-style line icons, stroke = currentColor) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-logo" viewBox="0 0 24 24">
+        <rect x="8.25" y="2" width="7.5" height="6" rx="1.8" fill="currentColor" stroke="none"/>
+        <rect x="1.5" y="16" width="7.5" height="6" rx="1.8" fill="currentColor" stroke="none"/>
+        <rect x="15" y="16" width="7.5" height="6" rx="1.8" fill="currentColor" stroke="none"/>
+        <path d="M12 8v4M12 12H5.25v4M12 12h6.75v4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.9-3.9a2 2 0 0 0-2.8 0L5 20"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+      <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></symbol>
+      <symbol id="i-focus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.36 6.36L3 16"/><path d="M3 21v-5h5"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 8.58 4.29a1 1 0 0 1 0 1.79L12 12 3.42 8.08a1 1 0 0 1 0-1.79Z"/><path d="m21 12-9 4.5L3 12"/><path d="m21 16.5-9 4.5-9-4.5"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></symbol>
+      <symbol id="i-redo" viewBox="0 0 24 24"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></symbol>
+      <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></symbol>
+      <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><line x1="8" y1="11" x2="14" y2="11"/></symbol>
+      <symbol id="i-fit" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></symbol>
+      <symbol id="i-briefcase" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></symbol>
+      <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.68-.75 1.68-1.68 0-.44-.17-.83-.44-1.13-.27-.3-.43-.7-.43-1.12a1.68 1.68 0 0 1 1.68-1.68h1.99A5.52 5.52 0 0 0 22 10.86C22 5.97 17.5 2 12 2z"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 4.99-5.54 10.19-7.4 11.8a1 1 0 0 1-1.2 0C9.54 20.19 4 14.99 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></symbol>
+      <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+      <symbol id="i-dollar" viewBox="0 0 24 24"><line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.5 9.5 21 3m0 0h-6m6 0v6"/><path d="M21 3 3 10.5l7 3.5 3.5 7L21 3Z"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></symbol>
+      <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+      <symbol id="i-lib" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+      <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></symbol>
+      <symbol id="i-wand" viewBox="0 0 24 24"><path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M15 9h.01M17.8 6.2 19 5M3 21l9-9M12.2 6.2 11 5"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-building" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/></symbol>
+    </defs>
+  </svg>
+
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-tree">🌳</span>
-        <h1>Orgtree</h1>
-        <span class="brand-sub">Pay once. Own your org chart forever.</span>
+        <svg class="brand-mark"><use href="#i-logo"/></svg>
+        <h1>WholeTeam</h1>
+        <span class="doc-name" id="doc-name">My Org</span>
+      </div>
+
+      <div class="menus">
+        <div class="menu" id="menu-file">
+          <button class="btn ghost menu-btn">File <svg class="icon chev"><use href="#i-chev"/></svg></button>
+          <div class="menu-pop hidden">
+            <button data-a="new"><svg class="icon"><use href="#i-file"/></svg>New chart file…</button>
+            <button data-a="open"><svg class="icon"><use href="#i-folder"/></svg>Open chart file…</button>
+            <button data-a="saveAs"><svg class="icon"><use href="#i-download"/></svg>Save as…</button>
+            <button data-a="openDefault"><svg class="icon"><use href="#i-logo"/></svg>Switch to My Org</button>
+            <div class="menu-sep"></div>
+            <button data-a="importCSV"><svg class="icon"><use href="#i-upload"/></svg>Import CSV / Excel…</button>
+            <div class="menu-sep"></div>
+            <button data-a="exportCSV"><svg class="icon"><use href="#i-download"/></svg>Export CSV</button>
+            <button data-a="exportXLSX"><svg class="icon"><use href="#i-download"/></svg>Export Excel</button>
+            <button data-a="exportPNG"><svg class="icon"><use href="#i-image"/></svg>Export PNG</button>
+            <button data-a="exportPDF"><svg class="icon"><use href="#i-file"/></svg>Export PDF</button>
+            <div class="menu-sep"></div>
+            <button data-a="smtp"><svg class="icon"><use href="#i-mail"/></svg>Email invite settings…</button>
+            <button data-a="wizard"><svg class="icon"><use href="#i-wand"/></svg>Run setup wizard…</button>
+          </div>
+        </div>
+
+        <div class="menu" id="menu-view">
+          <button class="btn ghost menu-btn">View <svg class="icon chev"><use href="#i-chev"/></svg></button>
+          <div class="menu-pop hidden">
+            <button data-a="toggleDept" class="check-item"><span class="tick" id="tick-dept">✓</span>Department pill</button>
+            <button data-a="toggleHeadcount" class="check-item"><span class="tick" id="tick-headcount">✓</span>Headcount on cards</button>
+            <button data-a="toggleCost" class="check-item"><span class="tick" id="tick-cost">✓</span>Branch cost on cards</button>
+            <div class="menu-sep"></div>
+            <button data-a="rules"><svg class="icon"><use href="#i-palette"/></svg>Conditional formatting…</button>
+          </div>
+        </div>
+
+        <div class="menu" id="menu-scenario">
+          <button class="btn ghost menu-btn" id="scenario-btn">Scenarios <svg class="icon chev"><use href="#i-chev"/></svg></button>
+          <div class="menu-pop hidden" id="scenario-pop"></div>
+        </div>
+
+        <div class="menu" id="menu-settings">
+          <button class="btn ghost menu-btn"><svg class="icon"><use href="#i-gear"/></svg> Settings <svg class="icon chev"><use href="#i-chev"/></svg></button>
+          <div class="menu-pop hidden">
+            <button data-a="newCompany"><svg class="icon"><use href="#i-building"/></svg>Create new company…</button>
+            <button data-a="wizard"><svg class="icon"><use href="#i-wand"/></svg>Run setup wizard…</button>
+            <div class="menu-sep"></div>
+            <button data-a="chat"><svg class="icon"><use href="#i-server"/></svg>Org chat, hosting &amp; hours…</button>
+            <button data-a="smtp"><svg class="icon"><use href="#i-mail"/></svg>Email invites (SMTP)…</button>
+            <div class="menu-sep"></div>
+            <button data-a="rules"><svg class="icon"><use href="#i-palette"/></svg>Conditional formatting…</button>
+          </div>
+        </div>
       </div>
 
       <div class="topbar-controls">
-        <input type="search" id="search" placeholder="Search people…" autocomplete="off">
-        <select id="dept-filter">
+        <div class="search-box">
+          <svg class="icon"><use href="#i-search"/></svg>
+          <input type="search" id="search" placeholder="Search name, title, dept…" autocomplete="off">
+          <span class="search-count hidden" id="search-count"></span>
+        </div>
+        <select id="dept-filter" title="Filter by department">
           <option value="">All departments</option>
         </select>
-        <button class="btn ghost" id="btn-reset-view" title="Return to full tree">Full tree</button>
+        <button class="btn ghost" id="btn-reset-view" title="Return to full tree">
+          <svg class="icon"><use href="#i-expand"/></svg><span>Full tree</span>
+        </button>
       </div>
 
       <div class="topbar-actions">
-        <button class="btn ghost" id="btn-import-csv" title="Bulk-load a roster from CSV">Import CSV</button>
-        <button class="btn ghost" id="btn-export-csv" title="Export roster as CSV">Export CSV</button>
-        <button class="btn ghost" id="btn-export-png" title="Export the visible chart as PNG">Export PNG</button>
-        <button class="btn primary" id="btn-add">+ Add Person</button>
+        <button class="btn ghost icon-only" id="btn-undo" title="Undo (Ctrl+Z)" disabled>
+          <svg class="icon"><use href="#i-undo"/></svg>
+        </button>
+        <button class="btn ghost icon-only" id="btn-redo" title="Redo (Ctrl+Y)" disabled>
+          <svg class="icon"><use href="#i-redo"/></svg>
+        </button>
+        <button class="btn ghost icon-only" id="btn-chat" title="Org chat">
+          <svg class="icon"><use href="#i-chat"/></svg>
+          <span class="chat-unread hidden" id="chat-unread-badge"></span>
+        </button>
+        <button class="btn ghost icon-only" id="btn-theme" title="Toggle light / dark theme">
+          <svg class="icon only-light"><use href="#i-moon"/></svg>
+          <svg class="icon only-dark"><use href="#i-sun"/></svg>
+        </button>
+        <button class="btn primary" id="btn-add">
+          <svg class="icon"><use href="#i-plus"/></svg><span>Add Person</span>
+        </button>
       </div>
     </header>
+
+    <div class="scenario-banner hidden" id="scenario-banner">
+      <svg class="icon"><use href="#i-layers"/></svg>
+      <span>Draft scenario: <b id="scenario-name"></b> — changes here don't touch the live chart.</span>
+      <span class="spacer"></span>
+      <button class="btn small primary" id="btn-promote">Promote to live</button>
+      <button class="btn small ghost" id="btn-back-live">Back to live</button>
+      <button class="btn small danger" id="btn-delete-scenario">Delete draft</button>
+    </div>
 
     <main class="view">
       <aside class="legend" id="legend"></aside>
       <div class="chart-wrap" id="chart-wrap">
         <canvas id="chart"></canvas>
         <div class="empty hidden" id="empty">
-          <div class="big">🌳</div>
+          <svg class="empty-art" viewBox="0 0 220 130" aria-hidden="true">
+            <g fill="none" stroke="var(--border-strong)" stroke-width="1.5">
+              <path d="M110 40v14M110 54H55v14M110 54h55v14M55 96v-14M165 96v-14"/>
+            </g>
+            <rect x="80" y="14" width="60" height="26" rx="7" fill="var(--accent)" opacity="0.9"/>
+            <rect x="25" y="68" width="60" height="26" rx="7" fill="var(--surface)" stroke="var(--border-strong)"/>
+            <rect x="135" y="68" width="60" height="26" rx="7" fill="var(--surface)" stroke="var(--border-strong)"/>
+            <rect x="88" y="22" width="26" height="4" rx="2" fill="#fff" opacity="0.9"/>
+            <rect x="88" y="30" width="38" height="3" rx="1.5" fill="#fff" opacity="0.55"/>
+            <rect x="33" y="76" width="26" height="4" rx="2" fill="var(--border-strong)"/>
+            <rect x="33" y="84" width="38" height="3" rx="1.5" fill="var(--border)"/>
+            <rect x="143" y="76" width="26" height="4" rx="2" fill="var(--border-strong)"/>
+            <rect x="143" y="84" width="38" height="3" rx="1.5" fill="var(--border)"/>
+          </svg>
           <h2>No one on the roster yet</h2>
-          <p>Add your first person, or import a CSV to bulk-load an existing roster.</p>
+          <p>Add your first person, import a CSV/Excel roster, or explore with sample data.</p>
+          <div class="empty-actions">
+            <button class="btn ghost" id="btn-sample">Load sample roster</button>
+            <button class="btn primary" id="btn-empty-add">
+              <svg class="icon"><use href="#i-plus"/></svg><span>Add Person</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="zoom-pill" id="zoom-pill">
+          <button id="btn-zoom-out" title="Zoom out"><svg class="icon"><use href="#i-zoom-out"/></svg></button>
+          <span id="zoom-label">100%</span>
+          <button id="btn-zoom-in" title="Zoom in"><svg class="icon"><use href="#i-zoom-in"/></svg></button>
+          <button id="btn-zoom-fit" title="Fit to window"><svg class="icon"><use href="#i-fit"/></svg></button>
         </div>
       </div>
+
+      <aside class="chat-panel hidden" id="chat-panel"></aside>
+
+      <aside class="drawer hidden" id="drawer">
+        <div class="drawer-head">
+          <div class="drawer-avatar" id="drawer-avatar"></div>
+          <div class="drawer-id">
+            <h2 id="drawer-name"></h2>
+            <p id="drawer-title"></p>
+          </div>
+          <button class="btn ghost icon-only small" id="btn-drawer-close" title="Close">
+            <svg class="icon"><use href="#i-x"/></svg>
+          </button>
+        </div>
+        <div class="drawer-body" id="drawer-body"></div>
+        <div class="drawer-actions">
+          <button class="btn ghost" id="btn-drawer-edit"><svg class="icon"><use href="#i-pencil"/></svg><span>Edit</span></button>
+          <button class="btn ghost" id="btn-drawer-focus"><svg class="icon"><use href="#i-focus"/></svg><span>Focus</span></button>
+          <button class="btn ghost hidden" id="btn-drawer-invite" title="Email an invite"><svg class="icon"><use href="#i-mail"/></svg><span>Invite</span></button>
+          <span class="spacer"></span>
+          <button class="btn danger icon-only" id="btn-drawer-delete" title="Delete"><svg class="icon"><use href="#i-trash"/></svg></button>
+        </div>
+      </aside>
     </main>
   </div>
 
   <!-- Person editor modal -->
   <div class="modal-backdrop hidden" id="modal">
-    <div class="modal">
+    <div class="modal wide">
       <h2 id="modal-title">Add Person</h2>
-      <div class="form">
+      <div class="form form-grid">
+        <label class="span2 check-row inline">
+          <input type="checkbox" id="f-open-role">
+          <span>This is an <b>open role</b> (vacancy being hired for)</span>
+        </label>
         <label>Name
           <input type="text" id="f-name" placeholder="Jordan Rivera" maxlength="80">
         </label>
@@ -62,12 +249,41 @@
         <label>Email
           <input type="email" id="f-email" placeholder="jordan@company.com" maxlength="120">
         </label>
+        <label>Phone
+          <input type="text" id="f-phone" placeholder="+1 555 010 2030" maxlength="40">
+        </label>
+        <label>Location
+          <input type="text" id="f-location" placeholder="Austin, TX" maxlength="80">
+        </label>
+        <label>Start date
+          <input type="date" id="f-start">
+        </label>
+        <label>Time zone
+          <select id="f-timezone"><option value="">— Not set —</option></select>
+        </label>
+        <label>Working hours
+          <input type="text" id="f-workhours" placeholder="9:00–17:00" maxlength="40">
+        </label>
+        <label>Salary <span class="hint">(number, used for cost rollups)</span>
+          <input type="number" id="f-salary" placeholder="85000" min="0" step="1000">
+        </label>
         <label>Manager
           <select id="f-manager">
             <option value="">— No manager (root) —</option>
           </select>
         </label>
-        <label>Photo <span class="hint">(optional — local file path reference)</span>
+        <label>Dotted-line manager <span class="hint">(secondary, drawn dashed)</span>
+          <select id="f-dotted">
+            <option value="">— None —</option>
+          </select>
+        </label>
+        <label>Notes
+          <input type="text" id="f-notes" placeholder="Anything worth remembering" maxlength="300">
+        </label>
+        <label>Extra fields <span class="hint">(Name: Value per line)</span>
+          <textarea id="f-custom" rows="1" placeholder="Slack: @jordan"></textarea>
+        </label>
+        <label class="span2">Photo <span class="hint">(optional — local file path reference)</span>
           <div class="photo-row">
             <input type="text" id="f-photo" placeholder="No photo selected" readonly>
             <button class="btn ghost small" id="btn-pick-photo" type="button">Choose…</button>
@@ -76,10 +292,108 @@
         </label>
       </div>
       <div class="modal-actions">
-        <button class="btn danger hidden" id="btn-delete">Delete</button>
+        <button class="btn danger hidden" id="btn-delete">
+          <svg class="icon"><use href="#i-trash"/></svg><span>Delete</span>
+        </button>
         <span class="spacer"></span>
         <button class="btn ghost" id="btn-cancel">Cancel</button>
         <button class="btn primary" id="btn-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Conditional formatting rules modal -->
+  <div class="modal-backdrop hidden" id="rules-modal">
+    <div class="modal wide">
+      <h2>Conditional formatting</h2>
+      <p class="modal-desc">Color cards by rules. The first matching rule wins. Applies to card border and tint.</p>
+      <div id="rules-list" class="rules-list"></div>
+      <button class="btn ghost" id="btn-add-rule"><svg class="icon"><use href="#i-plus"/></svg><span>Add rule</span></button>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button class="btn ghost" id="btn-rules-cancel">Cancel</button>
+        <button class="btn primary" id="btn-rules-save">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CSV import: update-in-place vs replace -->
+  <div class="modal-backdrop hidden" id="import-choice-modal">
+    <div class="modal">
+      <h2>Import roster</h2>
+      <p class="modal-desc" id="import-choice-desc"></p>
+      <div class="choice-cards">
+        <button class="choice-card" id="btn-import-update">
+          <svg class="icon"><use href="#i-refresh"/></svg>
+          <b>Update in place</b>
+          <span>Match people by email or name. Titles, departments and managers get updated — photos, layout and collapsed branches are kept.</span>
+        </button>
+        <button class="choice-card" id="btn-import-replace">
+          <svg class="icon"><use href="#i-folder"/></svg>
+          <b>Replace everything</b>
+          <span>Start fresh from the file. The current roster is discarded.</span>
+        </button>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="chk-remove-missing">
+        <span>When updating, remove people who aren't in the file</span>
+      </label>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button class="btn ghost" id="btn-import-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SMTP invite settings modal -->
+  <div class="modal-backdrop hidden" id="smtp-modal">
+    <div class="modal">
+      <h2>Email invite settings</h2>
+      <p class="modal-desc">Your own SMTP server sends the invites — no third-party email service sees them.</p>
+      <div class="form form-grid">
+        <label>SMTP host
+          <input type="text" id="smtp-host" placeholder="mail.yourcompany.com">
+        </label>
+        <label>Port
+          <input type="number" id="smtp-port" value="587" min="1" max="65535">
+        </label>
+        <label>Username
+          <input type="text" id="smtp-user" placeholder="invites@yourcompany.com">
+        </label>
+        <label>Password
+          <input type="password" id="smtp-pass">
+        </label>
+        <label>From address
+          <input type="text" id="smtp-from" placeholder="Orgtree <invites@yourcompany.com>">
+        </label>
+        <label class="check-row inline">
+          <input type="checkbox" id="smtp-secure">
+          <span>Use TLS (port 465)</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" id="btn-smtp-test">Test connection</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="btn-smtp-cancel">Cancel</button>
+        <button class="btn primary" id="btn-smtp-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Getting-started wizard -->
+  <div class="modal-backdrop hidden" id="wizard-modal">
+    <div class="modal wide">
+      <div class="wizard-head">
+        <svg class="icon"><use href="#i-wand"/></svg>
+        <h2 id="wizard-title">Welcome to Orgtree</h2>
+        <span class="wizard-step" id="wizard-step">1 / 3</span>
+      </div>
+      <div id="wizard-body"></div>
+      <div class="modal-actions">
+        <button class="btn ghost" id="btn-wizard-skip">Skip — start blank</button>
+        <span class="spacer"></span>
+        <button class="btn ghost hidden" id="btn-wizard-back">Back</button>
+        <button class="btn primary" id="btn-wizard-next">Next</button>
       </div>
     </div>
   </div>
@@ -102,5 +416,6 @@
   <script src="../src/csv.js"></script>
   <script src="layout.js"></script>
   <script src="app.js"></script>
+  <script src="chat.js"></script>
 </body>
 </html>

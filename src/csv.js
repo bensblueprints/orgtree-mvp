@@ -74,12 +74,28 @@ const HEADER_ALIASES = {
   department: 'department',
   dept: 'department',
   email: 'email',
+  phone: 'phone',
+  location: 'location',
+  start_date: 'start_date',
+  startdate: 'start_date',
+  salary: 'salary',
+  notes: 'notes',
+  is_open_role: 'is_open_role',
+  isopenrole: 'is_open_role',
+  open_role: 'is_open_role',
   manager_name: 'manager_name',
   managername: 'manager_name',
   manager: 'manager_name',
   manager_id: 'manager_id',
   managerid: 'manager_id',
+  dotted_manager_name: 'dotted_manager_name',
+  dottedmanagername: 'dotted_manager_name',
+  dotted_manager: 'dotted_manager_name',
 };
+
+function parseBool(v) {
+  return /^(1|y|yes|true|x)$/i.test(String(v || '').trim());
+}
 
 /**
  * Parse a roster CSV string.
@@ -100,8 +116,15 @@ function parseRoster(str) {
   const iTitle = col('title');
   const iDept = col('department');
   const iEmail = col('email');
+  const iPhone = col('phone');
+  const iLocation = col('location');
+  const iStart = col('start_date');
+  const iSalary = col('salary');
+  const iNotes = col('notes');
+  const iOpen = col('is_open_role');
   const iMgrName = col('manager_name');
   const iMgrId = col('manager_id');
+  const iDotName = col('dotted_manager_name');
 
   if (iName === -1) {
     errors.push({ row: 1, name: '', reason: 'missing required "name" column' });
@@ -114,18 +137,29 @@ function parseRoster(str) {
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     const name = cell(row, iName);
-    if (!name) continue; // skip blank rows
+    const isOpenRole = iOpen !== -1 && parseBool(cell(row, iOpen));
+    if (!name && !isOpenRole) continue; // skip blank rows
 
+    const salaryRaw = cell(row, iSalary).replace(/[$,\s]/g, '');
     people.push({
       id: nextImportId(),
-      name,
+      name: name || 'Open role',
       title: cell(row, iTitle),
       department: cell(row, iDept),
       email: cell(row, iEmail),
+      phone: cell(row, iPhone),
+      location: cell(row, iLocation),
+      startDate: cell(row, iStart),
+      salary: salaryRaw !== '' && !isNaN(Number(salaryRaw)) ? Number(salaryRaw) : null,
+      notes: cell(row, iNotes),
+      custom: {},
+      isOpenRole,
       managerId: null,
+      dottedManagerId: null,
       _rowNum: r + 1,
       _managerName: iMgrName !== -1 ? cell(row, iMgrName) : '',
       _managerIdRaw: iMgrId !== -1 ? cell(row, iMgrId) : '',
+      _dottedName: iDotName !== -1 ? cell(row, iDotName) : '',
     });
   }
 
@@ -151,26 +185,51 @@ function parseRoster(str) {
         errors.push({ row: p._rowNum, name: p.name, reason: `manager "${p._managerName}" not found in roster` });
       }
     }
+    if (p._dottedName) {
+      const key = p._dottedName.toLowerCase();
+      if (ambiguous.has(key)) {
+        errors.push({ row: p._rowNum, name: p.name, reason: `dotted-line manager "${p._dottedName}" is ambiguous (matches multiple people)` });
+      } else if (byNameLower.has(key)) {
+        p.dottedManagerId = byNameLower.get(key);
+      } else {
+        errors.push({ row: p._rowNum, name: p.name, reason: `dotted-line manager "${p._dottedName}" not found in roster` });
+      }
+    }
     delete p._rowNum;
     delete p._managerName;
     delete p._managerIdRaw;
+    delete p._dottedName;
   }
 
   return { people, errors };
 }
 
-/** Serialize a roster (array of {id, name, title, department, email, managerId}) to CSV. */
-function serializeRoster(people) {
+/** Roster as array-of-arrays (header + one row per person), shared by CSV and XLSX export. */
+function rosterRows(people) {
   const byId = new Map(people.map(p => [p.id, p]));
-  const rows = [['name', 'title', 'department', 'email', 'manager_name']];
+  const nameOf = (id) => (id && byId.has(id) ? byId.get(id).name : '');
+  const rows = [[
+    'name', 'title', 'department', 'email', 'phone', 'location',
+    'start_date', 'salary', 'notes', 'is_open_role', 'manager_name', 'dotted_manager_name',
+  ]];
   for (const p of people) {
-    const mgr = p.managerId && byId.has(p.managerId) ? byId.get(p.managerId).name : '';
-    rows.push([p.name || '', p.title || '', p.department || '', p.email || '', mgr]);
+    rows.push([
+      p.name || '', p.title || '', p.department || '', p.email || '',
+      p.phone || '', p.location || '', p.startDate || '',
+      p.salary == null ? '' : p.salary, p.notes || '',
+      p.isOpenRole ? 'yes' : '',
+      nameOf(p.managerId), nameOf(p.dottedManagerId),
+    ]);
   }
-  return serializeCSVRows(rows);
+  return rows;
 }
 
-const OrgtreeCSV = { parseCSVRows, serializeCSVRows, parseRoster, serializeRoster };
+/** Serialize a roster to CSV. */
+function serializeRoster(people) {
+  return serializeCSVRows(rosterRows(people));
+}
+
+const OrgtreeCSV = { parseCSVRows, serializeCSVRows, parseRoster, serializeRoster, rosterRows };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = OrgtreeCSV;
 if (typeof window !== 'undefined') window.OrgtreeCSV = OrgtreeCSV;

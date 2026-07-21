@@ -223,8 +223,8 @@ console.log('\n— Store: round-trip —');
   const file = store.save(dir, data);
   ok(fs.existsSync(file), 'store: save writes the data file');
   const loaded = store.load(dir);
-  eq(loaded.people, data.people, 'store: people survive round-trip byte-for-byte');
-  eq(loaded.settings, data.settings, 'store: settings (collapsed nodes) survive round-trip');
+  eq(loaded.people, store.normalizePeople(data.people), 'store: people survive round-trip (normalized shape)');
+  eq(loaded.settings.collapsed, data.settings.collapsed, 'store: settings (collapsed nodes) survive round-trip');
 
   // corrupt file -> safe default + .corrupt backup
   fs.writeFileSync(store.dataFile(dir), '{not json', 'utf8');
@@ -244,11 +244,115 @@ console.log('\n— Store: JSON export / import fidelity —');
   });
   const json = store.exportJSON(data);
   const back = store.importJSON(json);
-  eq(back.people, data.people, 'export->import: people identical');
+  eq(back.people, store.normalizePeople(data.people), 'export->import: people identical (normalized shape)');
 
   let threw = false;
   try { store.importJSON('{"app":"something-else"}'); } catch (_) { threw = true; }
   ok(threw, 'import: rejects non-Orgtree JSON');
+}
+
+console.log('\n— descendantStats: headcount + cost rollups —');
+{
+  const withPay = roster.map(x => ({ ...x, salary: 100 }));
+  const stats = T.descendantStats(withPay);
+  eq(stats.get('ceo').reports, 11, 'descendantStats: CEO has 11 descendants');
+  eq(stats.get('emA').reports, 2, 'descendantStats: Eng Mgr A has 2 descendants');
+  eq(stats.get('e1').reports, 0, 'descendantStats: leaf has 0 descendants');
+  eq(stats.get('ceo').cost, 1200, 'descendantStats: CEO branch cost = whole company');
+  eq(stats.get('emA').cost, 300, 'descendantStats: Mgr A branch cost = self + 2 reports');
+
+  const noPay = T.descendantStats(roster);
+  eq(noPay.get('ceo').cost, 0, 'descendantStats: missing salaries contribute 0 cost');
+}
+
+console.log('\n— CSV: schema-2 columns (open roles, dotted lines, salary) round-trip —');
+{
+  const csvIn = [
+    'name,title,department,email,location,salary,is_open_role,manager_name,dotted_manager_name',
+    'Boss One,CEO,Exec,b@co.test,Austin,"250,000",,,',
+    'Dot Ted,Engineer,Eng,d@co.test,Remote,120000,,Boss One,Helper Two',
+    'Helper Two,Support,Eng,h@co.test,,90000,,Boss One,',
+    ',Senior Engineer,Eng,,,140000,yes,Boss One,',
+  ].join('\r\n') + '\r\n';
+
+  const { people, errors } = CSV.parseRoster(csvIn);
+  eq(errors, [], 'CSV v2: clean file parses without errors');
+  eq(people.length, 4, 'CSV v2: 4 rows parsed (incl. nameless open role)');
+
+  const open = people.find(x => x.isOpenRole);
+  ok(!!open, 'CSV v2: is_open_role=yes parsed as an open role');
+  eq(open.name, 'Open role', 'CSV v2: nameless open role gets a default name');
+  eq(open.salary, 140000, 'CSV v2: open role salary parsed');
+
+  const boss = people.find(x => x.name === 'Boss One');
+  eq(boss.salary, 250000, 'CSV v2: salary with $ commas parsed as a number');
+
+  const dot = people.find(x => x.name === 'Dot Ted');
+  const helper = people.find(x => x.name === 'Helper Two');
+  eq(dot.dottedManagerId, helper.id, 'CSV v2: dotted_manager_name resolved within import');
+  eq(dot.location, 'Remote', 'CSV v2: location column parsed');
+
+  const out = CSV.serializeRoster(people);
+  const rt = CSV.parseRoster(out);
+  eq(rt.errors, [], 'CSV v2 round-trip: re-parse produces no errors');
+  const rtDot = rt.people.find(x => x.name === 'Dot Ted');
+  const rtHelper = rt.people.find(x => x.name === 'Helper Two');
+  eq(rtDot.dottedManagerId, rtHelper.id, 'CSV v2 round-trip: dotted line survives export+reimport');
+  const rtOpen = rt.people.find(x => x.isOpenRole);
+  ok(!!rtOpen, 'CSV v2 round-trip: open role flag survives export+reimport');
+}
+
+console.log('\n— Store: schema-2 normalize (new fields + scenarios) —');
+{
+  const raw = {
+    app: 'orgtree',
+    people: [{ id: 'a', name: 'A Person', salary: '95000', isOpenRole: 0, custom: { Slack: '@a' } }],
+    settings: { collapsed: [], showCost: true, condRules: [{ field: 'title', op: 'contains', value: 'Mgr', color: '#ff0000' }, { bad: true }] },
+    scenarios: [{ id: 's1', name: 'Q3 reorg', people: [{ id: 'a', name: 'A Person' }], collapsed: ['a'] }],
+  };
+  const n = store.normalize(raw);
+  eq(n.people[0].salary, 95000, 'normalize: string salary coerced to number');
+  eq(n.people[0].isOpenRole, false, 'normalize: falsy isOpenRole coerced to boolean');
+  eq(n.people[0].custom, { Slack: '@a' }, 'normalize: custom fields preserved');
+  eq(n.settings.showCost, true, 'normalize: view toggles preserved');
+  eq(n.settings.condRules.length, 1, 'normalize: malformed conditional rules dropped');
+  eq(n.scenarios.length, 1, 'normalize: scenarios preserved');
+  eq(n.scenarios[0].collapsed, ['a'], 'normalize: scenario collapsed set preserved');
+
+  // schema-1 file (no new keys) still loads clean
+  const old = store.normalize({ app: 'orgtree', people: [{ id: 'x', name: 'Old Timer', managerId: null }], settings: { collapsed: [] } });
+  eq(old.people[0].dottedManagerId, null, 'normalize: schema-1 person gains dottedManagerId default');
+  eq(old.scenarios, [], 'normalize: schema-1 file gains empty scenarios');
+}
+
+console.log('\n— invite email builder —');
+{
+  const inviteMod = require('../src/invite');
+  const mail = inviteMod.buildInvite({
+    name: 'Jordan Rivera', company: 'Acme Mfg', department: 'Engineering',
+    inviterName: 'Ben', joinAddr: '192.168.1.24:4600',
+  });
+  ok(mail.subject.includes('Acme Mfg') && mail.subject.includes('Engineering'), 'invite subject names company and department');
+  ok(mail.text.includes('192.168.1.24:4600'), 'invite text includes the chat join address');
+  ok(mail.html.includes('My profile'), 'invite html points to the profile self-fill step');
+  const noAddr = inviteMod.buildInvite({ name: 'X', company: 'Acme' });
+  ok(noAddr.text.includes('ask your admin'), 'invite without a join address tells them to ask the admin');
+  const xss = inviteMod.buildInvite({ name: '<script>x</script>', company: 'A&B' });
+  ok(!xss.html.includes('<script>'), 'invite html escapes user-supplied values');
+}
+
+console.log('\n— store: company name + timezone/pin fields —');
+{
+  const n = store.normalize({
+    app: 'orgtree',
+    people: [{ id: 'a', name: 'A', timezone: 'America/Chicago', workHours: '9-5', pinHash: 'abc123' }],
+    settings: { collapsed: [], companyName: 'Acme Mfg', onboarded: true },
+  });
+  eq(n.settings.companyName, 'Acme Mfg', 'normalize: company name preserved');
+  eq(n.settings.onboarded, true, 'normalize: onboarded flag preserved');
+  eq(n.people[0].timezone, 'America/Chicago', 'normalize: timezone preserved');
+  eq(n.people[0].workHours, '9-5', 'normalize: working hours preserved');
+  eq(n.people[0].pinHash, 'abc123', 'normalize: pin hash preserved');
 }
 
 console.log(`\nAll good — ${passed} assertions passed.\n`);

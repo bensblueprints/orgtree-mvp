@@ -1,4 +1,10 @@
-# Building the macOS app (.dmg)
+# Building WholeTeam for macOS (.dmg)
+
+Repo: `bensblueprints/orgtree-mvp` (product name: **WholeTeam**). The
+`build.mac` section in `package.json` is already configured (dmg for Intel
+x64 + Apple Silicon arm64, `build/icon.png`), so no extra flags are needed —
+`npx electron-builder --mac` just works. Output: `dist/WholeTeam-<version>.dmg`
+(one per architecture).
 
 Two ways to get a Mac build of this app:
 
@@ -33,18 +39,13 @@ nvm use 20
 ### 2. Clone and build
 
 ```bash
-git clone https://github.com/bensblueprints/<REPO-NAME>.git
-cd <REPO-NAME>
+git clone https://github.com/bensblueprints/orgtree-mvp.git
+cd orgtree-mvp
 
-npm ci          # or `npm install` if there is no package-lock.json
+npm ci
 
-npx electron-builder --mac dmg --publish never \
-  -c.mac.category=public.app-category.productivity \
-  -c.mac.target=dmg
+npx electron-builder --mac --publish never
 ```
-
-The `-c.mac.*` flags are only needed if the app's `package.json` `build`
-config has no `mac` section — they're harmless either way.
 
 ### 3. Where the DMG lands
 

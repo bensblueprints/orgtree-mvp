@@ -165,6 +165,30 @@ function departmentsOf(people) {
   return [...new Set(people.map(p => p.department).filter(Boolean))].sort();
 }
 
+/**
+ * Rollup stats for every person: number of descendants (all levels) and the
+ * total salary cost of their branch (self + all descendants; people with no
+ * salary contribute 0). Cycle-safe because it walks buildTree's forest.
+ * Returns Map id -> { reports, cost }.
+ */
+function descendantStats(people) {
+  const stats = new Map();
+  const walk = (node) => {
+    let reports = 0;
+    let cost = typeof node.salary === 'number' ? node.salary : 0;
+    for (const c of node.children) {
+      const cs = walk(c);
+      reports += 1 + cs.reports;
+      cost += cs.cost;
+    }
+    const s = { reports, cost };
+    stats.set(node.id, s);
+    return s;
+  };
+  buildTree(people).forEach(walk);
+  return stats;
+}
+
 const OrgtreeTree = {
   buildTree,
   detectCycles,
@@ -173,6 +197,7 @@ const OrgtreeTree = {
   filterByDepartment,
   findNode,
   departmentsOf,
+  descendantStats,
 };
 
 /* Works as a CommonJS module (main process, tests) and as a plain

@@ -10,10 +10,10 @@
  * (each node has .id, .children, plus person fields).
  */
 (function () {
-  const NODE_W = 200;
-  const NODE_H = 78;
-  const H_GAP = 36;
-  const V_GAP = 76;
+  const NODE_W = 212;
+  const NODE_H = 86;
+  const H_GAP = 32;
+  const V_GAP = 72;
   const ROOT_GAP = H_GAP * 2;
 
   function layoutTree(roots, collapsedSet) {
@@ -51,6 +51,7 @@
         w: NODE_W, h: NODE_H,
         cx, cy: y + NODE_H / 2,
         hasChildren: node.children.length > 0,
+        childCount: node.children.length,
         collapsed: collapsedSet.has(node.id),
       };
       positions.push(pos);
