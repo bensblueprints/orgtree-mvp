@@ -119,6 +119,11 @@
             <button data-a="rules"><svg class="icon"><use href="#i-palette"/></svg>Conditional formatting…</button>
           </div>
         </div>
+
+        <div class="menu" id="menu-timeclock">
+          <button class="btn ghost menu-btn"><svg class="icon"><use href="#i-timer"/></svg> Time Clock<span class="clock-ind hidden" id="clock-ind"></span> <svg class="icon chev"><use href="#i-chev"/></svg></button>
+          <div class="menu-pop hidden" id="timeclock-pop"></div>
+        </div>
       </div>
 
       <div class="topbar-controls">
@@ -166,6 +171,12 @@
     </div>
 
     <main class="view">
+      <div class="member-hero hidden" id="member-hero">
+        <svg class="brand-mark"><use href="#i-logo"/></svg>
+        <h2>WholeTeam Member</h2>
+        <p>Chat with your team, share files, track your hours, and keep your profile up to date — everything stays inside your company's own network.</p>
+        <p class="member-hint">Use the chat panel on the right to connect. Ask your admin for the office address if you don't have it.</p>
+      </div>
       <aside class="legend" id="legend"></aside>
       <div class="chart-wrap" id="chart-wrap">
         <canvas id="chart"></canvas>

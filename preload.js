@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('orgtree', {
   chatHost: (port, retentionDays) => ipcRenderer.invoke('chat:host', port, retentionDays),
   chatStopHost: () => ipcRenderer.invoke('chat:stopHost'),
   chatHostInfo: () => ipcRenderer.invoke('chat:hostInfo'),
+  getEdition: () => ipcRenderer.invoke('app:edition'),
   activityIdleSec: () => ipcRenderer.invoke('activity:idleSec'),
   chatPickFile: () => ipcRenderer.invoke('chat:pickFile'),
   chatSaveFile: (name, data) => ipcRenderer.invoke('chat:saveFile', name, data),

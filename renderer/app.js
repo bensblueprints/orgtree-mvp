@@ -146,6 +146,7 @@ async function loadAll() {
 }
 
 async function persist() {
+  if (!doc) return; // member edition never loads a document
   syncBack();
   await window.orgtree.saveData(doc);
 }
@@ -332,6 +333,7 @@ function currentRoots() {
 const PAD = 60;
 
 function render() {
+  if (!doc) return; // member edition never loads a document
   rebuildLegend();
   rebuildDeptFilterOptions();
   updateScenarioUI();
@@ -952,6 +954,7 @@ document.querySelectorAll('.menu-btn').forEach(btn => {
     if (wasHidden) {
       if (pop.id === 'scenario-pop') rebuildScenarioMenu();
       pop.classList.remove('hidden');
+      if (pop.id === 'timeclock-pop' && window.__wholeteamRenderClockMenu) window.__wholeteamRenderClockMenu();
     }
   });
 });
@@ -1937,6 +1940,15 @@ function toast(msg) {
 // ---------- boot ----------
 
 (async function init() {
+  const edition = window.orgtree.getEdition ? await window.orgtree.getEdition() : 'admin';
+  if (edition === 'member') {
+    // Member edition: chat, library, time clock and profile only — no chart
+    // editing, no hosting, no admin surfaces. chat.js opens the panel itself.
+    document.body.classList.add('member');
+    $('member-hero').classList.remove('hidden');
+    emptyEl.classList.add('hidden');
+    return;
+  }
   await loadAll();
   setZoom(1, { silent: true });
   render();

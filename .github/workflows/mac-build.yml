@@ -54,31 +54,37 @@ jobs:
             echo "No frontend build script - skipping"
           fi
 
-      - name: Build DMG
+      - name: Build Admin DMG (full app)
         shell: bash
-        # -c.mac.* CLI overrides cover apps whose electron-builder config has
-        # no "mac" section; they are harmless no-ops for apps that already do.
-        run: |
-          npx electron-builder --mac dmg --publish never \
-            -c.mac.category=public.app-category.productivity \
-            -c.mac.target=dmg
+        run: npx electron-builder --mac --publish never
         env:
           # No Apple Developer certs configured — skip code signing entirely.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Upload DMG artifact
+      - name: Build Member DMG (employee edition — no hosting/admin)
+        shell: bash
+        run: |
+          npx electron-builder --mac --publish never \
+            -c.extraMetadata.wholeteamEdition=member \
+            -c.productName="WholeTeam Member" \
+            -c.appId=com.bensblueprints.wholeteam.member \
+            -c.directories.output=dist-member
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload DMG artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
           path: |
             dist/*.dmg
-            release/*.dmg
+            dist-member/*.dmg
           if-no-files-found: error
 
-      - name: Attach DMG to release
+      - name: Attach DMGs to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.dmg
-            release/*.dmg
+            dist-member/*.dmg

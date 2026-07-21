@@ -12,6 +12,15 @@ const invite = require('./src/invite');
 
 let win = null;
 
+// Edition: 'admin' (full app) or 'member' (chat/clock/profile only, cannot
+// host). Baked at package time via electron-builder extraMetadata; the env
+// var covers dev runs.
+const EDITION = process.env.WHOLETEAM_EDITION
+  || require('./package.json').wholeteamEdition
+  || 'admin';
+
+ipcMain.handle('app:edition', () => EDITION);
+
 // Test/QA hook: point the app at an alternate data directory.
 if (process.env.ORGTREE_USERDATA) app.setPath('userData', process.env.ORGTREE_USERDATA);
 
@@ -125,12 +134,18 @@ function createWindow() {
             await win.webContents.executeJavaScript(
               `window.__orgtreeChatMode=${JSON.stringify(process.env.ORGTREE_SHOT_CHAT)}; window.__orgtreeChatDemo && window.__orgtreeChatDemo()`, true);
           }
+          win.webContents.invalidate();
           setTimeout(async () => {
-            const img = await win.capturePage();
+            let img = await win.capturePage();
+            if (img.isEmpty()) {
+              win.webContents.invalidate();
+              await new Promise(r => setTimeout(r, 700));
+              img = await win.capturePage();
+            }
             fs.writeFileSync(process.env.ORGTREE_SHOT, img.toPNG());
-            console.log('SHOT:' + process.env.ORGTREE_SHOT);
+            console.log('SHOT:' + process.env.ORGTREE_SHOT + ' bytes:' + img.toPNG().length);
             app.exit(0);
-          }, 900);
+          }, 1200);
         } catch (err) {
           console.log('SHOT-ERROR:' + err.message);
           app.exit(1);
@@ -373,6 +388,7 @@ function lanIp() {
 }
 
 ipcMain.handle('chat:host', async (_e, port, retentionDays) => {
+  if (EDITION === 'member') return { ok: false, error: 'The Member edition cannot host. Hosting needs WholeTeam Admin.' };
   if (chatServer) return { ok: true, port: chatServer.port, ip: lanIp(), already: true, retentionDays: chatServer.retentionDays };
   try {
     const data = loadCurrent();

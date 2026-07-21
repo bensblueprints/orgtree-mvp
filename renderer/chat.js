@@ -42,7 +42,9 @@
     mySummary: null,
     error: '',
     notice: '',
+    tcError: '',
     open: false,
+    member: false,   // member edition: no hosting, no admin surfaces
   };
 
   const RETENTION_OPTIONS = [
@@ -202,6 +204,8 @@
         }, 30000);
       }
       if (C.clockedIn) startActivitySampler();
+      updateClockIndicator();
+      if (clockMenuOpen()) renderClockMenu();
       render(); updateBadge();
       return;
     }
@@ -211,6 +215,10 @@
       else if (m.error === 'no-pin-set') C.error = 'Set a PIN in My profile first.';
       else if (m.error === 'file-too-large') C.error = 'That file is over the 300 MB share limit.';
       else C.error = m.error;
+      if (clockMenuOpen() && (m.error === 'bad-pin' || m.error === 'no-pin-set')) {
+        C.tcError = C.error;
+        renderClockMenu();
+      }
       render();
       return;
     }
@@ -267,6 +275,8 @@
       C.error = '';
       if (C.clockedIn) startActivitySampler(); else stopActivitySampler();
       if (m.summary) C.mySummary = m.summary;
+      updateClockIndicator();
+      if (clockMenuOpen()) renderClockMenu();
       render();
       return;
     }
@@ -276,8 +286,13 @@
       const j = JSON.stringify(m.entries || []);
       const changed = j !== lastTimesheetJson;
       lastTimesheetJson = j;
-      if (C.admin && m.entries && m.entries.length > 1) C.timesheets = m.entries;
-      else if (m.entries && m.entries.length === 1) C.mySummary = m.entries[0];
+      if (C.admin && m.entries && m.entries.length > 1) {
+        C.timesheets = m.entries;
+        if (C.you) C.mySummary = m.entries.find(e => e.personId === C.you.id) || C.mySummary;
+      } else if (m.entries && m.entries.length === 1) {
+        C.mySummary = m.entries[0];
+      }
+      if (changed && clockMenuOpen()) renderClockMenu();
       if (changed && C.view === 'list') render();
       return;
     }
@@ -399,9 +414,7 @@
 
   function renderSetup() {
     const last = loadLast();
-    panel.innerHTML = header('Team Chat', { sub: 'Closed-loop office chat — nothing leaves your network' }) + `
-      <div class="chat-body">
-        ${errLine()}
+    const hostCard = C.member ? '' : `
         <div class="chat-setup-card">
           <div class="chat-setup-title"><svg class="icon"><use href="#i-server"/></svg>Host chat on this machine (admin)</div>
           <p>Your computer becomes the office server. You keep the only edit access to the chart; others join and manage just their own profile.</p>
@@ -415,7 +428,11 @@
           <div class="chat-inline" style="margin-top:8px">
             <button class="btn primary small" id="chat-host-btn" style="flex:1">Start hosting</button>
           </div>
-        </div>
+        </div>`;
+    panel.innerHTML = header('Team Chat', { sub: 'Closed-loop office chat — nothing leaves your network' }) + `
+      <div class="chat-body">
+        ${errLine()}
+        ${hostCard}
         <div class="chat-setup-card">
           <div class="chat-setup-title"><svg class="icon"><use href="#i-chat"/></svg>Join the office chat</div>
           <p>Enter the address shown on the host's screen (e.g. 192.168.1.24:4600).</p>
@@ -433,7 +450,8 @@
         </div>
       </div>`;
     wireCommon();
-    $('chat-host-btn').addEventListener('click', () =>
+    const hostBtn = $('chat-host-btn');
+    if (hostBtn) hostBtn.addEventListener('click', () =>
       hostAndJoin(Number($('chat-port').value) || 4600, Number($('chat-retention').value) || null));
     const join = () => {
       const addr = $('chat-addr').value.trim().replace(/^ws:\/\//, '');
@@ -541,7 +559,7 @@
       <input type="text" id="chat-msg-search" placeholder="Search all messages…" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:8px 12px;font-size:13px;font-family:inherit">
     </div>`;
 
-    if (C.admin && C.timesheets.length) {
+    if (C.admin && !C.member && C.timesheets.length) {
       html += '<div class="chat-section">Timesheets (admin only)</div>';
       for (const t of C.timesheets) {
         const p = personById(t.personId);
@@ -835,6 +853,90 @@
     if (close) close.addEventListener('click', togglePanel);
   }
 
+  // ---------- Time Clock topbar menu (clock in/out without opening chat) ----------
+
+  function clockMenuOpen() {
+    const pop = $('timeclock-pop');
+    return !!pop && !pop.classList.contains('hidden');
+  }
+
+  function updateClockIndicator() {
+    const el = $('clock-ind');
+    if (el) el.classList.toggle('hidden', !C.clockedIn);
+  }
+
+  let lastTsReq = 0;
+  function requestMyTimesheet() {
+    const now = Date.now();
+    if (C.you && now - lastTsReq > 5000) {
+      lastTsReq = now;
+      sendServer({ type: 'timesheet', personId: C.you.id });
+    }
+  }
+
+  function renderClockMenu() {
+    const pop = $('timeclock-pop');
+    if (!pop) return;
+    const last = loadLast();
+    const err = C.tcError ? `<div class="chat-error">${esc(C.tcError)}</div>` : '';
+    C.tcError = '';
+    let inner;
+
+    if (C.you) {
+      const sum = C.mySummary;
+      const stats = sum
+        ? `<div class="tc-stats"><span><b>${fmtHours(sum.todaySec)}</b> today</span><span><b>${fmtHours(sum.weekSec)}</b> this week</span>${sum.activePct != null ? `<span><b>${sum.activePct}%</b> active</span>` : ''}</div>`
+        : '';
+      if (C.clockedIn) {
+        inner = `${err}<div class="tc-status on">Clocked in — sharing active/idle level (no keystrokes)</div>${stats}
+          <button class="btn small ghost tc-full" id="tc-out">Clock out</button>`;
+      } else if (C.pinSet) {
+        inner = `${err}<div class="tc-status">Not clocked in — ${esc(C.you.name)}</div>${stats}
+          <div class="chat-inline"><input type="password" id="tc-pin" placeholder="PIN" maxlength="8" inputmode="numeric"><button class="btn small primary" id="tc-in" style="flex:1">Clock in</button></div>`;
+      } else {
+        inner = `${err}<div class="tc-status">You haven't set a clock-in PIN yet.</div>
+          <button class="btn small primary tc-full" id="tc-profile">Set a PIN in My profile</button>`;
+      }
+      requestMyTimesheet();
+    } else if (C.ws) {
+      inner = C.view === 'pick'
+        ? `${err}<div class="tc-status">Connected — pick who you are first.</div><button class="btn small primary tc-full" id="tc-open">Open Team Chat</button>`
+        : `${err}<div class="tc-status">Connecting to the office…</div>`;
+    } else if (last.personId && (last.addr || last.mode === 'host')) {
+      inner = `${err}<div class="tc-status">Reconnecting to the office…</div>`;
+      if (last.mode === 'host' && !C.member) hostAndJoin(last.port || 4600, Number(last.retentionDays) || null);
+      else if (last.addr) connect(last.addr);
+    } else {
+      inner = `${err}<div class="tc-status">The time clock runs on your office connection. Set it up once in Team Chat — after that, clocking in works right here.</div>
+        <button class="btn small primary tc-full" id="tc-open">Open Team Chat</button>`;
+    }
+
+    pop.innerHTML = `<div class="tc-body">${inner}</div>`;
+
+    const tin = $('tc-in');
+    if (tin) tin.addEventListener('click', (e) => { e.stopPropagation(); sendServer({ type: 'clockIn', pin: $('tc-pin').value }); });
+    const pin = $('tc-pin');
+    if (pin) {
+      pin.addEventListener('click', (e) => e.stopPropagation());
+      pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendServer({ type: 'clockIn', pin: pin.value }); });
+    }
+    const tout = $('tc-out');
+    if (tout) tout.addEventListener('click', (e) => { e.stopPropagation(); sendServer({ type: 'clockOut' }); });
+    const topen = $('tc-open');
+    if (topen) topen.addEventListener('click', () => {
+      document.querySelectorAll('.menu-pop').forEach(p => p.classList.add('hidden'));
+      if (!C.open) togglePanel();
+    });
+    const tprof = $('tc-profile');
+    if (tprof) tprof.addEventListener('click', () => {
+      document.querySelectorAll('.menu-pop').forEach(p => p.classList.add('hidden'));
+      C.view = 'profile'; C.error = '';
+      if (!C.open) togglePanel(); else render();
+    });
+  }
+
+  window.__wholeteamRenderClockMenu = renderClockMenu;
+
   function togglePanel() {
     C.open = !C.open;
     if (C.open && C.view === 'convo' && C.current) C.unread.delete(C.current);
@@ -845,8 +947,17 @@
 
   (async function initChat() {
     try {
+      if (window.orgtree.getEdition) C.member = (await window.orgtree.getEdition()) === 'member';
       const info = await window.orgtree.chatHostInfo();
       if (info.hosting) C.hosting = { ip: info.ip, port: info.port };
+      // Member edition is chat-first: open the panel and reconnect on launch.
+      if (C.member) {
+        C.open = true;
+        const last = loadLast();
+        if (last.addr && last.personId) connect(last.addr);
+        else render();
+        updateBadge();
+      }
     } catch (_) { /* bridge unavailable */ }
   })();
 

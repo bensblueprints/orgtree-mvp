@@ -552,6 +552,44 @@ body {
 }
 .wizard-emp-row .rule-del { width: 28px; height: 32px; }
 
+/* ---------- member edition ---------- */
+body.member .menus > .menu:not(#menu-timeclock),
+body.member #btn-add,
+body.member #dept-filter,
+body.member #btn-reset-view,
+body.member #btn-undo,
+body.member #btn-redo,
+body.member .legend,
+body.member .chart-wrap,
+body.member .doc-name,
+body.member .topbar-controls,
+body.member .scenario-banner { display: none !important; }
+.member-hero {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: 40px; gap: 12px;
+}
+.member-hero .brand-mark { width: 56px; height: 56px; color: var(--accent); }
+.member-hero h2 { font-size: 22px; }
+.member-hero p { font-size: 14px; color: var(--muted); max-width: 420px; line-height: 1.6; }
+.member-hero .member-hint { font-size: 12.5px; }
+
+/* ---------- time clock menu ---------- */
+.clock-ind {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: #22c55e; margin-left: 5px; flex-shrink: 0;
+}
+.tc-body { padding: 6px 8px; min-width: 240px; display: flex; flex-direction: column; gap: 9px; }
+.tc-status { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.tc-status.on { color: #15803d; font-weight: 600; }
+:root[data-theme="dark"] .tc-status.on { color: #86efac; }
+.tc-stats { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+.tc-stats b { color: var(--accent); font-size: 14px; }
+.tc-full { width: 100%; justify-content: center; }
+.tc-body .chat-inline input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 7px 9px; font-size: 13px; font-family: inherit; width: 80px;
+}
+
 /* zoom pill also dodges the chat panel */
 .view:has(.chat-panel:not(.hidden)) .zoom-pill { right: 344px; }
 .view:has(.chat-panel:not(.hidden)):has(.drawer:not(.hidden)) .zoom-pill { right: 644px; }
