@@ -168,6 +168,7 @@
     ws.onclose = () => {
       if (C.ws !== ws) return;
       C.ws = null;
+      resetVoice();
       stopActivitySampler();
       const wasIn = ['list', 'convo', 'library', 'profile', 'search'].includes(C.view);
       C.view = 'setup';
@@ -820,7 +821,7 @@
       ${compose}`;
     wireCommon();
     $('chat-back').addEventListener('click', () => { resetVoice(); C.view = 'list'; C.current = null; render(); });
-    if (!isDm) $('chat-lib').addEventListener('click', () => { C.backView = 'convo'; C.view = 'library'; render(); });
+    if (!isDm) $('chat-lib').addEventListener('click', () => { resetVoice(); C.backView = 'convo'; C.view = 'library'; render(); });
     const input = $('chat-input');
     if (input) {
       const send = () => {
@@ -886,8 +887,9 @@
         if (m.type === 'result') { cleanup(); resolve(m.text || ''); }
         if (m.type === 'error') { cleanup(); resolve(''); }
       };
-      // worker-level failure (module import/CSP block): settle so "Transcribing…" can't hang forever
-      const onErr = () => { cleanup(); resolve(''); };
+      // worker-level failure (module import/CSP block): settle so "Transcribing…" can't hang forever;
+      // drop the cached worker so the next note builds a fresh one
+      const onErr = () => { cleanup(); transcribeWorker = null; resolve(''); };
       worker.addEventListener('message', handler);
       worker.addEventListener('error', onErr);
       worker.postMessage({ id, pcm });
