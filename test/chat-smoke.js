@@ -159,6 +159,31 @@ const roster = [
     await s8.stop();
   }
 
+  console.log('\n— chart edits reach connected clients (new member appears for pickers) —');
+  {
+    const s9 = await createChatServer({ port: PORT, roster });
+    const picker = await client(PORT); await sleep(120); // connected, still on "Who are you?"
+    const member = await client(PORT); await sleep(80);
+    member.send({ type: 'hello', personId: 'ada' }); await sleep(120);
+
+    // Host adds a brand-new person (new department too) while everyone is connected.
+    s9.updateRoster(roster.concat([{ id: 'newb', name: 'New Hire', title: 'Intern', department: 'Design' }]));
+    await sleep(250);
+
+    const pickerSync = picker.inbox.filter(m => m.type === 'rosterSync').pop();
+    ok(!!pickerSync, 'unidentified picker is pushed a rosterSync when the chart changes');
+    ok(pickerSync && pickerSync.roster.some(p => p.id === 'newb'), 'picker sees the newly added member without reconnecting');
+    ok(pickerSync && pickerSync.channels.some(c => c.id === 'dept:Design'), 'new department channel is included in the push');
+    const memberSync = member.inbox.filter(m => m.type === 'rosterSync').pop();
+    ok(!!memberSync && memberSync.roster.some(p => p.id === 'newb'), 'identified members also get the fresh roster');
+
+    picker.send({ type: 'hello', personId: 'newb' });
+    await sleep(150);
+    ok(picker.inbox.some(m => m.type === 'welcome' && m.you.id === 'newb'), 'new member can be picked immediately after the push');
+
+    await s9.stop();
+  }
+
   console.log('\n— restart: history survives —');
   const server2 = await createChatServer({ port: PORT, roster, storeFile });
   const d = await client(PORT);
@@ -312,6 +337,67 @@ const roster = [
     ok(ts.entries.length >= 1, 'timesheet query answers');
 
     await s6.stop();
+  }
+
+  console.log('\n— presence status: clock-in line, busy toggle, roster fields —');
+  {
+    const withSched = roster.map(p => p.id === 'vic'
+      ? { ...p, schedule: { mon: [['09:00', '12:00'], ['13:00', '17:00']] }, timeFormat: '24h' }
+      : p);
+    const s10 = await createChatServer({ port: PORT, roster: withSched });
+    const w1 = await client(PORT); await sleep(80);
+    w1.send({ type: 'hello', personId: 'ada' }); await sleep(120);
+    const w2 = await client(PORT); await sleep(80);
+    w2.send({ type: 'hello', personId: 'vic' }); await sleep(120);
+
+    const rMsg = w1.inbox.find(m => m.type === 'roster');
+    const vicRow = rMsg.roster.find(p => p.id === 'vic');
+    eq(vicRow.schedule, { mon: [['09:00', '12:00'], ['13:00', '17:00']] }, 'roster carries schedule');
+    eq(vicRow.timeFormat, '24h', 'roster carries timeFormat');
+    ok(Array.isArray(rMsg.statuses), 'roster carries a statuses list');
+
+    w2.send({ type: 'status', status: 'busy' });
+    await sleep(120);
+    ok(!w1.inbox.some(m => m.type === 'statusChanged' && m.entry && m.entry.status === 'busy'),
+      'busy ignored while not clocked in');
+
+    w2.send({ type: 'clockIn', pin: '4821', statusText: 'Q3 budget review' });
+    await sleep(150);
+    const inChg = w1.inbox.filter(m => m.type === 'statusChanged').pop();
+    eq(inChg.entry.personId, 'vic', 'statusChanged identifies the person');
+    eq(inChg.entry.clockedIn, true, 'clock-in broadcast to everyone');
+    eq(inChg.entry.statusText, 'Q3 budget review', 'working-on line broadcast');
+
+    w2.send({ type: 'status', status: 'busy' });
+    await sleep(120);
+    eq(w1.inbox.filter(m => m.type === 'statusChanged').pop().entry.status, 'busy', 'busy while clocked in');
+
+    w2.send({ type: 'status', statusText: 'budget review v2' });
+    await sleep(120);
+    eq(w1.inbox.filter(m => m.type === 'statusChanged').pop().entry.statusText, 'budget review v2', 'working-on line editable');
+
+    w2.send({ type: 'clockOut' });
+    await sleep(150);
+    const outChg = w1.inbox.filter(m => m.type === 'statusChanged').pop();
+    eq(outChg.entry.clockedIn, false, 'clock-out broadcast');
+    eq(outChg.entry.statusText, '', 'clock-out clears the working-on line');
+    eq(outChg.entry.status, 'available', 'clock-out resets busy');
+
+    w2.send({ type: 'profile', fields: { schedule: { fri: [['10:00', '16:00']] }, timeFormat: '12h' } });
+    await sleep(150);
+    const rUpd = w1.inbox.filter(m => m.type === 'rosterUpdate').pop();
+    eq(rUpd.fields.schedule, { fri: [['10:00', '16:00']] }, 'profile schedule update broadcast');
+    eq(rUpd.fields.timeFormat, '12h', 'profile timeFormat update broadcast');
+
+    w2.send({ type: 'clockIn', pin: '4821', statusText: 'about to vanish' });
+    await sleep(150);
+    w2.ws.close(); // hard disconnect = automatic clock-out
+    await sleep(250);
+    const dcChg = w1.inbox.filter(m => m.type === 'statusChanged').pop();
+    eq(dcChg.entry.clockedIn, false, 'hard disconnect broadcasts the clock-out');
+    eq(dcChg.entry.statusText, '', 'hard disconnect clears the working-on line');
+
+    await s10.stop();
   }
 
   fs.rmSync(dir, { recursive: true, force: true });

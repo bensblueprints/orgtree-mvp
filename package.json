@@ -1,7 +1,7 @@
 {
   "name": "orgtree",
   "productName": "WholeTeam",
-  "version": "1.5.5",
+  "version": "1.6.0",
   "description": "WholeTeam — own-it-forever org chart, planning, and closed-loop team chat. Chart + scenarios + LAN chat + file library + hours. No subscription.",
   "main": "main.js",
   "author": "Ben (bensblueprints)",

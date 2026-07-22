@@ -25,6 +25,7 @@
     roster: [],
     channels: [],
     taken: [],
+    statuses: new Map(), // personId -> { personId, clockedIn, status, statusText }
     online: [],
     you: null,
     admin: false,
@@ -55,6 +56,7 @@
   let samplerTimer = null;
   let sampleAcc = { active: 0, sample: 0 };
   let tsRefreshTimer = null;
+  let availTimer = null;
   let lastTimesheetJson = '';
   const pendingDownloads = new Set();
 
@@ -89,6 +91,9 @@
   }
 
   function personById(id) { return C.roster.find(p => p.id === id) || null; }
+  function applyStatusList(list) {
+    C.statuses = new Map((list || []).map(e => [e.personId, e]));
+  }
   function dmChannel(a, b) { return 'dm:' + [String(a), String(b)].sort().join('|'); }
 
   function channelLabel(ch) {
@@ -101,6 +106,23 @@
       return p ? p.name : 'Direct message';
     }
     return ch;
+  }
+
+  // green = clocked in, yellow = busy, red = scheduled now but not clocked in,
+  // grey ('off') = outside scheduled hours / no schedule.
+  function dotClass(pid) {
+    const e = C.statuses.get(pid);
+    if (e && e.clockedIn) return e.status === 'busy' ? 'busy' : 'on';
+    const p = personById(pid);
+    if (p && window.OrgtreeAvailability && !OrgtreeAvailability.isEmpty(p.schedule)) {
+      const st = OrgtreeAvailability.stateAt(p.schedule, p.timezone, new Date());
+      if (st.state !== 'off' && st.state !== 'none') return 'late';
+    }
+    return 'off';
+  }
+  function statusTextOf(pid) {
+    const e = C.statuses.get(pid);
+    return e && e.clockedIn ? (e.statusText || '') : '';
   }
 
   function totalUnread() {
@@ -154,6 +176,8 @@
     stopActivitySampler();
     clearInterval(tsRefreshTimer);
     tsRefreshTimer = null;
+    clearInterval(availTimer);
+    availTimer = null;
     lastTimesheetJson = '';
     if (C.ws) { const w = C.ws; C.ws = null; try { w.close(); } catch (_) {} }
     C.you = null; C.view = 'setup'; C.current = null;
@@ -172,6 +196,7 @@
       C.channels = m.channels || [];
       C.taken = m.taken || [];
       C.retentionDays = m.retentionDays || null;
+      applyStatusList(m.statuses);
       const last = loadLast();
       if (last.personId && C.roster.some(p => p.id === last.personId) && !C.taken.includes(last.personId)) {
         sendServer({ type: 'hello', personId: last.personId });
@@ -182,8 +207,19 @@
       render();
       return;
     }
+    if (m.type === 'rosterSync') {
+      // Host edited the chart while we were connected — refresh the picker and
+      // channel list without kicking the user out of their current view.
+      C.roster = m.roster || [];
+      C.channels = m.channels || [];
+      C.taken = m.taken || [];
+      applyStatusList(m.statuses);
+      if (['pick', 'list'].includes(C.view)) render();
+      return;
+    }
     if (m.type === 'welcome') {
       C.you = m.you;
+      applyStatusList(m.statuses);
       C.online = m.online || [];
       C.admin = !!m.admin;
       C.pinSet = !!m.pinSet;
@@ -204,6 +240,10 @@
         }, 30000);
       }
       if (C.clockedIn) startActivitySampler();
+      clearInterval(availTimer);
+      availTimer = setInterval(() => {
+        if (['availability', 'list'].includes(C.view)) render();
+      }, 60000);
       updateClockIndicator();
       if (clockMenuOpen()) renderClockMenu();
       render(); updateBadge();
@@ -230,7 +270,20 @@
     if (m.type === 'rosterUpdate') {
       const p = personById(m.personId);
       if (p && m.fields) {
-        for (const k of ['timezone', 'workHours']) if (m.fields[k] != null) p[k] = m.fields[k];
+        for (const k of ['timezone', 'workHours', 'timeFormat']) if (m.fields[k] != null) p[k] = m.fields[k];
+        if (m.fields.schedule != null) p.schedule = m.fields.schedule;
+      }
+      return;
+    }
+    if (m.type === 'statusChanged') {
+      if (m.entry) {
+        C.statuses.set(m.entry.personId, m.entry);
+        if (C.you && m.entry.personId === C.you.id) {
+          C.clockedIn = !!m.entry.clockedIn;
+          updateClockIndicator();
+          if (clockMenuOpen()) renderClockMenu();
+        }
+        if (['list', 'availability'].includes(C.view)) render();
       }
       return;
     }
@@ -383,6 +436,7 @@
     else if (C.view === 'connecting') renderConnecting();
     else if (C.view === 'pick') renderPick();
     else if (C.view === 'list') renderList();
+    else if (C.view === 'availability') renderAvailability();
     else if (C.view === 'convo') renderConvo();
     else if (C.view === 'library') renderLibrary();
     else if (C.view === 'profile') renderProfile();
@@ -502,9 +556,13 @@
   function clockCard() {
     if (!C.you) return '';
     if (C.clockedIn) {
+      const me = C.statuses.get(C.you.id) || {};
       return `<div class="chat-clock on">
         <svg class="icon"><use href="#i-timer"/></svg>
-        <span><b>Clocked in.</b> Your active/idle level (no keystrokes) is shared with the admin.</span>
+        <span><b>Clocked in${me.status === 'busy' ? ' — busy' : ''}.</b></span>
+        <input type="text" id="chat-status-edit" placeholder="Working on… (optional)" maxlength="140" style="flex:1" value="${esc(me.statusText || '')}">
+        <button class="btn small ghost" id="chat-status-save">Save</button>
+        <button class="btn small ghost" id="chat-busy">${me.status === 'busy' ? 'Mark available' : 'Mark busy'}</button>
         <button class="btn small ghost" id="chat-clock-out">Clock out</button>
       </div>`;
     }
@@ -517,12 +575,12 @@
     return `<div class="chat-clock">
       <svg class="icon"><use href="#i-timer"/></svg>
       <input type="password" id="chat-pin" placeholder="PIN" maxlength="8" inputmode="numeric" style="width:64px">
+      <input type="text" id="chat-status-text" placeholder="Working on… (optional)" maxlength="140" style="flex:1">
       <button class="btn small primary" id="chat-clock-in">Clock in</button>
     </div>`;
   }
 
   function renderList() {
-    const onlineSet = new Set(C.online);
     const lastMsgOf = (ch) => {
       const list = C.msgs.get(ch) || [];
       return list.length ? list[list.length - 1] : null;
@@ -537,7 +595,7 @@
       const last = lastMsgOf(id);
       return `<button class="chat-row" data-ch="${esc(id)}">
         ${isDm
-          ? `<span class="chat-dot ${onlineSet.has(otherId) ? 'on' : ''}"></span>`
+          ? `<span class="chat-dot ${dotClass(otherId)}"></span>`
           : '<span class="chat-hash">#</span>'}
         <span class="chat-row-main">
           <span class="chat-row-name">${esc(label)}</span>
@@ -549,6 +607,7 @@
 
     const headBtns = `
       <button class="chat-icon-btn" id="chat-all-files" title="All shared files"><svg class="icon"><use href="#i-lib"/></svg></button>
+      <button class="chat-icon-btn" id="chat-avail" title="Team availability"><svg class="icon"><use href="#i-users"/></svg></button>
       <button class="chat-icon-btn" id="chat-profile" title="My profile"><svg class="icon"><use href="#i-user"/></svg></button>`;
     const subBits = [`You are ${C.you.name}`, `${C.online.length} online`];
     if (retentionNote()) subBits.push(retentionNote());
@@ -565,7 +624,7 @@
         const p = personById(t.personId);
         if (!p) continue;
         html += `<div class="chat-ts-row">
-          <span class="chat-dot ${t.clockedIn ? 'on' : ''}"></span>
+          <span class="chat-dot ${dotClass(t.personId)}"></span>
           <span class="chat-row-main">
             <span class="chat-row-name">${esc(p.name)}</span>
             <span class="chat-row-sub">${fmtHours(t.todaySec)} today · ${fmtHours(t.weekSec)} this week${t.activePct != null ? ` · ${t.activePct}% active` : ''}</span>
@@ -581,10 +640,10 @@
     html += '<div class="chat-section">Direct messages</div>';
     for (const p of C.roster.filter(p => p.id !== C.you.id)) {
       const bits = [p.title || '—'];
+      const workingOn = statusTextOf(p.id);
+      if (workingOn) bits.push('working on: ' + workingOn);
       if (p.timezone) {
-        try {
-          bits.push(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: p.timezone }) + ' local');
-        } catch (_) { /* bad tz string */ }
+        bits.push(OrgtreeAvailability.clockInTz(p.timezone, new Date(), (C.you && C.you.timeFormat) || '12h') + ' local');
       }
       html += chRow(dmChannel(C.you.id, p.id), p.name, bits.join(' · '), true, p.id);
     }
@@ -598,6 +657,8 @@
     if (stop) stop.addEventListener('click', stopHosting);
     const prof = $('chat-profile');
     if (prof) prof.addEventListener('click', () => { C.view = 'profile'; C.error = ''; render(); });
+    const avail = $('chat-avail');
+    if (avail) avail.addEventListener('click', () => { C.view = 'availability'; C.error = ''; render(); });
     const allFiles = $('chat-all-files');
     if (allFiles) allFiles.addEventListener('click', () => {
       C.current = '*'; C.backView = 'list'; C.view = 'library';
@@ -611,9 +672,67 @@
       }
     });
     const cin = $('chat-clock-in');
-    if (cin) cin.addEventListener('click', () => sendServer({ type: 'clockIn', pin: $('chat-pin').value }));
+    if (cin) cin.addEventListener('click', () => {
+      const st = $('chat-status-text');
+      sendServer({ type: 'clockIn', pin: $('chat-pin').value, statusText: st ? st.value.trim() : '' });
+    });
+    const stSave = $('chat-status-save');
+    if (stSave) stSave.addEventListener('click', () => {
+      sendServer({ type: 'status', statusText: $('chat-status-edit').value.trim() });
+    });
+    const busy = $('chat-busy');
+    if (busy) busy.addEventListener('click', () => {
+      const me = C.statuses.get(C.you.id) || {};
+      sendServer({ type: 'status', status: me.status === 'busy' ? 'available' : 'busy' });
+    });
     const cout = $('chat-clock-out');
     if (cout) cout.addEventListener('click', () => sendServer({ type: 'clockOut' }));
+  }
+
+  function renderAvailability() {
+    const AV = OrgtreeAvailability;
+    const tf = (C.you && C.you.timeFormat) || '12h';
+    const now = new Date();
+    const nowMin = (now.getHours() * 60 + now.getMinutes());
+    const order = { working: 0, break: 1, starts: 2, off: 3, none: 4 };
+
+    const rows = C.roster.map(p => {
+      const st = AV.stateAt(p.schedule, p.timezone, now);
+      return { p, st, tl: AV.viewerTimeline(p.schedule, p.timezone, undefined, now) };
+    }).sort((a, b) =>
+      (order[a.st.state] - order[b.st.state]) || ((a.st.nextStart || 0) - (b.st.nextStart || 0)));
+
+    const pill = (st) => {
+      switch (st.state) {
+        case 'working': return `<span class="avail-pill on">Available now</span>`;
+        case 'break': return `<span class="avail-pill break">On break — back in ${AV.fmtCountdown(st.nextStart)}</span>`;
+        case 'starts': return `<span class="avail-pill">Starts in ${AV.fmtCountdown(st.nextStart)}</span>`;
+        case 'off': return `<span class="avail-pill off">Off today${st.nextStart ? ' — back in ' + AV.fmtCountdown(st.nextStart) : ''}</span>`;
+        default: return `<span class="avail-pill off">No schedule</span>`;
+      }
+    };
+
+    let html = header('Team availability', { back: true, sub: 'Their blocks, in your timezone' }) + '<div class="chat-body">' + errLine();
+    for (const { p, st, tl } of rows) {
+      const workingOn = statusTextOf(p.id);
+      const segs = tl.map(s =>
+        `<span class="avail-seg" style="left:${(s.startMin / 1440 * 100).toFixed(2)}%;width:${((s.endMin - s.startMin) / 1440 * 100).toFixed(2)}%"></span>`).join('');
+      html += `<div class="avail-row">
+        <div class="avail-top">
+          <span class="chat-dot ${dotClass(p.id)}"></span>
+          <span class="chat-row-main">
+            <span class="chat-row-name">${esc(p.name)}${p.id === C.you.id ? ' (you)' : ''}</span>
+            <span class="chat-row-sub">${esc(AV.clockInTz(p.timezone, now, tf))} local${workingOn ? ' · working on: ' + esc(workingOn) : ''}</span>
+          </span>
+          ${pill(st)}
+        </div>
+        <div class="avail-track">${segs}<span class="avail-now" style="left:${(nowMin / 1440 * 100).toFixed(2)}%"></span></div>
+      </div>`;
+    }
+    html += '</div>';
+    panel.innerHTML = html;
+    wireCommon();
+    $('chat-back').addEventListener('click', () => { C.view = 'list'; render(); });
   }
 
   function openChannel(ch) {
@@ -642,7 +761,7 @@
       const mine = m.from === C.you.id;
       const grouped = m.from === lastFrom && m.ts - lastTs < 5 * 60 * 1000 && m.kind !== 'file';
       lastFrom = m.from; lastTs = m.ts;
-      const time = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const time = OrgtreeAvailability.clockInTz(undefined, new Date(m.ts), (C.you && C.you.timeFormat) || '12h');
       let bubble;
       if (m.kind === 'file') {
         bubble = `<div class="chat-bubble file">
@@ -801,7 +920,15 @@
               ${zones.map(z => `<option value="${esc(z)}" ${me.timezone === z ? 'selected' : ''}>${esc(z.replace(/_/g, ' '))}</option>`).join('')}
             </select>
           </label>
-          <label>Working hours <input type="text" id="pf-hours" placeholder="9:00-17:00" value="${esc(me.workHours || '')}"></label>
+          <label>Time display
+            <select id="pf-timeformat">
+              <option value="12h" ${(me.timeFormat || '12h') === '12h' ? 'selected' : ''}>12-hour (2:30 PM)</option>
+              <option value="24h" ${me.timeFormat === '24h' ? 'selected' : ''}>24-hour (14:30)</option>
+            </select>
+          </label>
+          <label>Working hours <span class="hint">(blocks per day; a gap between blocks is a break)</span>
+            <div id="pf-schedule"></div>
+          </label>
           <label>Start date <input type="date" id="pf-start"></label>
           <label>Notes <input type="text" id="pf-notes" placeholder="Anything your team should know"></label>
           <label>${C.pinSet ? 'Change clock-in PIN' : 'Set clock-in PIN'} <span class="hint">(4-8 digits, used to track your hours)</span>
@@ -816,6 +943,7 @@
                <button class="btn small ghost" id="pf-clock-out">Clock out</button>`
             : `<span><b>Track your hours:</b></span>
                <input type="password" id="pf-clock-pin" placeholder="PIN" maxlength="8" inputmode="numeric" style="width:64px">
+               <input type="text" id="pf-status-text" placeholder="Working on… (optional)" maxlength="140" style="flex:1">
                <button class="btn small primary" id="pf-clock-in">Clock in</button>`}
         </div>` : ''}
         <div class="chat-inline" style="margin-top:14px">
@@ -824,18 +952,21 @@
         <p class="chat-lib-note" style="margin-top:10px">Only fields you fill in are sent. Blank fields stay as they are.</p>
       </div>`;
     wireCommon();
+    ScheduleEditor.mount($('pf-schedule'), me.schedule, { timeFormat: me.timeFormat || '12h', prefillFrom: me.workHours });
     $('chat-back').addEventListener('click', () => { C.view = 'list'; render(); });
     const pfIn = $('pf-clock-in');
-    if (pfIn) pfIn.addEventListener('click', () => sendServer({ type: 'clockIn', pin: $('pf-clock-pin').value }));
+    if (pfIn) pfIn.addEventListener('click', () => sendServer({ type: 'clockIn', pin: $('pf-clock-pin').value, statusText: $('pf-status-text').value.trim() }));
     const pfOut = $('pf-clock-out');
     if (pfOut) pfOut.addEventListener('click', () => sendServer({ type: 'clockOut' }));
     $('pf-save').addEventListener('click', () => {
       const fields = {};
-      const map = { phone: 'pf-phone', location: 'pf-location', timezone: 'pf-timezone', workHours: 'pf-hours', startDate: 'pf-start', notes: 'pf-notes' };
+      const map = { phone: 'pf-phone', location: 'pf-location', timezone: 'pf-timezone', startDate: 'pf-start', notes: 'pf-notes' };
       for (const [k, id] of Object.entries(map)) {
         const v = $(id).value.trim();
         if (v) fields[k] = v;
       }
+      fields.schedule = ScheduleEditor.read($('pf-schedule'));
+      fields.timeFormat = $('pf-timeformat').value;
       const pin = $('pf-pin').value.trim();
       const payload = { type: 'profile', fields };
       if (pin) {
@@ -892,7 +1023,7 @@
           <button class="btn small ghost tc-full" id="tc-out">Clock out</button>`;
       } else if (C.pinSet) {
         inner = `${err}<div class="tc-status">Not clocked in — ${esc(C.you.name)}</div>${stats}
-          <div class="chat-inline"><input type="password" id="tc-pin" placeholder="PIN" maxlength="8" inputmode="numeric"><button class="btn small primary" id="tc-in" style="flex:1">Clock in</button></div>`;
+          <div class="chat-inline"><input type="password" id="tc-pin" placeholder="PIN" maxlength="8" inputmode="numeric"><input type="text" id="tc-status-text" placeholder="Working on…" maxlength="140" style="flex:1"><button class="btn small primary" id="tc-in" style="flex:1">Clock in</button></div>`;
       } else {
         inner = `${err}<div class="tc-status">You haven't set a clock-in PIN yet.</div>
           <button class="btn small primary tc-full" id="tc-profile">Set a PIN in My profile</button>`;
@@ -914,11 +1045,20 @@
     pop.innerHTML = `<div class="tc-body">${inner}</div>`;
 
     const tin = $('tc-in');
-    if (tin) tin.addEventListener('click', (e) => { e.stopPropagation(); sendServer({ type: 'clockIn', pin: $('tc-pin').value }); });
+    if (tin) tin.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const st = $('tc-status-text');
+      sendServer({ type: 'clockIn', pin: $('tc-pin').value, statusText: st ? st.value.trim() : '' });
+    });
     const pin = $('tc-pin');
     if (pin) {
       pin.addEventListener('click', (e) => e.stopPropagation());
-      pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendServer({ type: 'clockIn', pin: pin.value }); });
+      pin.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const st = $('tc-status-text');
+          sendServer({ type: 'clockIn', pin: pin.value, statusText: st ? st.value.trim() : '' });
+        }
+      });
     }
     const tout = $('tc-out');
     if (tout) tout.addEventListener('click', (e) => { e.stopPropagation(); sendServer({ type: 'clockOut' }); });

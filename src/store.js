@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const availability = require('./availability');
 
 const SCHEMA_VERSION = 2;
 
@@ -87,6 +88,8 @@ function normalizePerson(p) {
     photo: p.photo ? String(p.photo) : '',
     timezone: p.timezone ? String(p.timezone) : '',
     workHours: p.workHours ? String(p.workHours) : '',
+    timeFormat: p.timeFormat === '24h' ? '24h' : '12h',
+    schedule: availability.normalizeSchedule(p.schedule),
     pinHash: p.pinHash ? String(p.pinHash) : '',
   };
 }
