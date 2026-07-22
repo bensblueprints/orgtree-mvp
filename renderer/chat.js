@@ -64,7 +64,10 @@
   let voiceRec = null;      // { recorder, stream, chunks, startTs, timerId, channel }
   let voiceReview = null;   // { blob, blobUrl, duration, mime, pcm, channel, text }
   let transcribeWorker = null;
-  const voicePending = new Map(); // fileId -> { resolve } for playback fetches (Task 4)
+  const voicePending = new Map(); // fileId -> { resolve, mime } for playback fetches
+  const voiceUrlCache = new Map(); // fileId -> object URL for fetched voice notes
+  let voiceAudio = null; // currently playing Audio element
+  let voicePlayingId = null;
 
   function saveLast(obj) {
     try { localStorage.setItem('orgtree-chat-last', JSON.stringify(obj)); } catch (_) {}
@@ -383,6 +386,13 @@
   }
 
   async function handleFileData(m) {
+    if (voicePending.has(m.id)) {
+      const { resolve, mime } = voicePending.get(m.id);
+      voicePending.delete(m.id);
+      const bytes = Uint8Array.from(atob(m.data), c => c.charCodeAt(0));
+      resolve(URL.createObjectURL(new Blob([bytes], { type: mime || 'audio/webm' })));
+      return;
+    }
     if (pendingDownloads.has(m.id)) {
       pendingDownloads.delete(m.id);
       const res = await window.orgtree.chatSaveFile(m.name, m.data);
@@ -771,7 +781,14 @@
       lastFrom = m.from; lastTs = m.ts;
       const time = OrgtreeAvailability.clockInTz(undefined, new Date(m.ts), (C.you && C.you.timeFormat) || '12h');
       let bubble;
-      if (m.kind === 'file') {
+      if (m.kind === 'voice') {
+        bubble = `<div class="chat-bubble voice">
+          <button class="chat-voice-play" data-file="${esc(m.fileId)}" data-mime="${esc(m.mime)}" title="Play voice note"><svg class="icon"><use href="#i-play"/></svg></button>
+          <span class="chat-voice-track"><span class="chat-voice-fill" id="vf-${esc(m.fileId)}"></span></span>
+          <span class="chat-voice-time" id="vt-${esc(m.fileId)}">${fmtClock(m.duration)}</span>
+          ${m.text ? `<div class="chat-voice-text">${esc(m.text)}</div>` : ''}
+        </div>`;
+      } else if (m.kind === 'file') {
         bubble = `<div class="chat-bubble file">
           <svg class="icon"><use href="#i-paperclip"/></svg>
           <span class="chat-file-main"><b>${esc(m.fileName)}</b><span>${fmtSize(m.size)}${synced.has(m.fileId) ? ' · synced to your library folder' : ''}</span></span>
@@ -857,6 +874,9 @@
         sendServer({ type: 'fileGet', id: b.dataset.file, reason: 'download' });
       });
     });
+    panel.querySelectorAll('.chat-voice-play').forEach(b => {
+      b.addEventListener('click', () => playVoice(b.dataset.file, b.dataset.mime, b));
+    });
     const box = $('chat-msgs');
     box.scrollTop = box.scrollHeight;
     if (input) input.focus();
@@ -865,6 +885,30 @@
   function fmtClock(sec) {
     const s = Math.max(0, Math.round(sec));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function playVoice(fileId, mime, btn) {
+    const start = (url) => {
+      if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; voicePlayingId = null; }
+      const audio = new Audio(url);
+      voiceAudio = audio; voicePlayingId = fileId;
+      const fill = $('vf-' + CSS.escape(fileId));
+      const time = $('vt-' + CSS.escape(fileId));
+      audio.ontimeupdate = () => {
+        if (time) time.textContent = fmtClock(audio.currentTime) + ' / ' + fmtClock(audio.duration || 0);
+        if (fill && audio.duration) fill.style.width = (audio.currentTime / audio.duration * 100).toFixed(1) + '%';
+      };
+      audio.onended = () => { voiceAudio = null; voicePlayingId = null; };
+      audio.play();
+    };
+    if (voicePlayingId === fileId && voiceAudio) { voiceAudio.pause(); voiceAudio = null; voicePlayingId = null; return; }
+    const cached = voiceUrlCache.get(fileId);
+    if (cached) { start(cached); return; }
+    btn.disabled = true;
+    new Promise((resolve) => {
+      voicePending.set(fileId, { resolve, mime });
+      sendServer({ type: 'fileGet', id: fileId, reason: 'voice' });
+    }).then((url) => { voiceUrlCache.set(fileId, url); btn.disabled = false; start(url); });
   }
 
   function getTranscribeWorker() {
@@ -1100,7 +1144,7 @@
         <span class="chat-hash">${m.channel.startsWith('dm:') ? '@' : '#'}</span>
         <span class="chat-row-main">
           <span class="chat-row-name">${esc(channelLabel(m.channel))} · ${esc(m.fromName)} · ${new Date(m.ts).toLocaleDateString()}</span>
-          <span class="chat-row-sub">${esc(m.kind === 'file' ? '[file] ' + m.fileName : m.text)}</span>
+          <span class="chat-row-sub">${esc(m.kind === 'file' ? '[file] ' + m.fileName : m.kind === 'voice' ? '[voice note] ' + m.text : m.text)}</span>
         </span>
       </button>`;
     }
