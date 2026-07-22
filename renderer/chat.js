@@ -179,6 +179,7 @@
   }
 
   function disconnect(rerender = true) {
+    resetVoice();
     stopActivitySampler();
     clearInterval(tsRefreshTimer);
     tsRefreshTimer = null;
@@ -818,7 +819,7 @@
       <div class="chat-body chat-msgs" id="chat-msgs">${errLine()}${bodyHtml}</div>
       ${compose}`;
     wireCommon();
-    $('chat-back').addEventListener('click', () => { C.view = 'list'; C.current = null; render(); });
+    $('chat-back').addEventListener('click', () => { resetVoice(); C.view = 'list'; C.current = null; render(); });
     if (!isDm) $('chat-lib').addEventListener('click', () => { C.backView = 'convo'; C.view = 'library'; render(); });
     const input = $('chat-input');
     if (input) {
@@ -874,14 +875,21 @@
     return new Promise((resolve) => {
       const id = 't-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const worker = getTranscribeWorker();
+      const cleanup = () => {
+        worker.removeEventListener('message', handler);
+        worker.removeEventListener('error', onErr);
+      };
       const handler = (e) => {
         const m = e.data || {};
         if (m.id !== id) return;
         if (m.type === 'progress' && onProgress) onProgress(m.pct);
-        if (m.type === 'result') { worker.removeEventListener('message', handler); resolve(m.text || ''); }
-        if (m.type === 'error') { worker.removeEventListener('message', handler); resolve(''); }
+        if (m.type === 'result') { cleanup(); resolve(m.text || ''); }
+        if (m.type === 'error') { cleanup(); resolve(''); }
       };
+      // worker-level failure (module import/CSP block): settle so "Transcribing…" can't hang forever
+      const onErr = () => { cleanup(); resolve(''); };
       worker.addEventListener('message', handler);
+      worker.addEventListener('error', onErr);
       worker.postMessage({ id, pcm });
     });
   }
@@ -945,6 +953,21 @@
     renderConvo();
   }
 
+  // tear down any in-flight recording or pending review (navigation/disconnect); callers re-render
+  function resetVoice() {
+    if (voiceRec) {
+      clearInterval(voiceRec.timerId);
+      voiceRec.recorder.onstop = null;
+      try { voiceRec.recorder.stop(); } catch (_) {}
+      voiceRec.stream.getTracks().forEach(t => t.stop());
+      voiceRec = null;
+    }
+    if (voiceReview) {
+      if (voiceReview.blobUrl) URL.revokeObjectURL(voiceReview.blobUrl);
+      voiceReview = null;
+    }
+  }
+
   async function finishVoice() {
     const rec = voiceRec;
     if (!rec) return;
@@ -955,18 +978,29 @@
     const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || 'audio/webm' });
     if (!blob.size || duration < 0.5) { renderConvo(); return; } // empty/accidental
     voiceReview = { blob, blobUrl: URL.createObjectURL(blob), duration, mime: blob.type, channel: rec.channel, pcm: null, text: null };
+    const vr = voiceReview;
     renderConvo();
     // transcribe in the background of the review step; never blocks sending
     try {
-      voiceReview.pcm = await blobToPcm16k(blob);
-      if (!voiceReview) return;
-      const text = await transcribe(voiceReview.pcm, (pct) => {
+      const pcm = await blobToPcm16k(blob);
+      if (voiceReview !== vr) return; // discarded/superseded while decoding
+      vr.pcm = pcm;
+      const text = await transcribe(pcm, (pct) => {
         const el = $('voice-transcribing');
         if (el) el.textContent = 'Downloading speech model (one-time ~40 MB)… ' + pct + '%';
       });
-      if (voiceReview) { voiceReview.text = text; renderConvo(); }
+      if (voiceReview !== vr) return; // discarded/superseded while transcribing
+      // update the DOM in place so in-progress edits in the textarea survive
+      vr.text = text;
+      const ta = $('voice-transcript');
+      if (ta) ta.value = text;
+      const spinner = $('voice-transcribing');
+      if (spinner) spinner.remove();
     } catch (_) {
-      if (voiceReview) { voiceReview.text = ''; renderConvo(); }
+      if (voiceReview !== vr) return;
+      vr.text = '';
+      const spinner = $('voice-transcribing');
+      if (spinner) spinner.remove();
     }
   }
 
