@@ -60,6 +60,12 @@
   let lastTimesheetJson = '';
   const pendingDownloads = new Set();
 
+  // ---------- voice notes ----------
+  let voiceRec = null;      // { recorder, stream, chunks, startTs, timerId, channel }
+  let voiceReview = null;   // { blob, blobUrl, duration, mime, pcm, channel, text }
+  let transcribeWorker = null;
+  const voicePending = new Map(); // fileId -> { resolve } for playback fetches (Task 4)
+
   function saveLast(obj) {
     try { localStorage.setItem('orgtree-chat-last', JSON.stringify(obj)); } catch (_) {}
   }
@@ -781,32 +787,68 @@
 
     const libBtn = isDm ? '' : `<button class="chat-icon-btn" id="chat-lib" title="Channel library (files & links)"><svg class="icon"><use href="#i-lib"/></svg></button>`;
 
-    panel.innerHTML = header((isDm ? '' : '#') + channelLabel(ch), { back: true, sub: subBits.join(' · '), buttons: libBtn }) + `
-      <div class="chat-body chat-msgs" id="chat-msgs">${errLine()}${bodyHtml}</div>
-      <div class="chat-compose">
+    let compose;
+    if (voiceRec) {
+      compose = `<div class="chat-compose voice-rec">
+        <span class="chat-voice-dot"></span>
+        <span id="chat-voice-rec-time">${fmtClock((Date.now() - voiceRec.startTs) / 1000)}</span>
+        <button class="btn primary small" id="chat-voice-stop" style="flex:1">Stop &amp; review</button>
+        <button class="btn ghost small" id="chat-voice-cancel">Cancel</button>
+      </div>`;
+    } else if (voiceReview) {
+      compose = `<div class="chat-compose voice-review">
+        <audio id="voice-audio" controls src="${esc(voiceReview.blobUrl)}"></audio>
+        <div class="chat-voice-meta">${fmtClock(voiceReview.duration)}${voiceReview.text === null ? ' · <span id="voice-transcribing">Transcribing…</span>' : ''}</div>
+        <textarea id="voice-transcript" rows="2" maxlength="4000" placeholder="Transcript (editable) — becomes searchable text">${esc(voiceReview.text || '')}</textarea>
+        <div class="chat-inline">
+          <button class="btn ghost small" id="voice-discard" style="flex:1">Discard</button>
+          <button class="btn primary small" id="voice-send" style="flex:1">Send voice note</button>
+        </div>
+      </div>`;
+    } else {
+      compose = `<div class="chat-compose">
         <button class="btn ghost icon-only" id="chat-attach" title="Share a file (goes to the ${esc(channelLabel(ch))} library)"><svg class="icon"><use href="#i-paperclip"/></svg></button>
+        <button class="btn ghost icon-only" id="chat-mic" title="Record a voice note"><svg class="icon"><use href="#i-mic"/></svg></button>
         <input type="text" id="chat-input" placeholder="Message ${esc(channelLabel(ch))}…" maxlength="4000" autocomplete="off">
         <button class="btn primary icon-only" id="chat-send" title="Send"><svg class="icon"><use href="#i-send"/></svg></button>
       </div>`;
+    }
+
+    panel.innerHTML = header((isDm ? '' : '#') + channelLabel(ch), { back: true, sub: subBits.join(' · '), buttons: libBtn }) + `
+      <div class="chat-body chat-msgs" id="chat-msgs">${errLine()}${bodyHtml}</div>
+      ${compose}`;
     wireCommon();
     $('chat-back').addEventListener('click', () => { C.view = 'list'; C.current = null; render(); });
     if (!isDm) $('chat-lib').addEventListener('click', () => { C.backView = 'convo'; C.view = 'library'; render(); });
     const input = $('chat-input');
-    const send = () => {
-      const text = input.value.trim();
-      if (!text) return;
-      sendServer({ type: 'msg', channel: ch, text });
-      input.value = '';
-      input.focus();
-    };
-    $('chat-send').addEventListener('click', send);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-    $('chat-attach').addEventListener('click', async () => {
+    if (input) {
+      const send = () => {
+        const text = input.value.trim();
+        if (!text) return;
+        sendServer({ type: 'msg', channel: ch, text });
+        input.value = '';
+        input.focus();
+      };
+      $('chat-send').addEventListener('click', send);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+    }
+    const attach = $('chat-attach');
+    if (attach) attach.addEventListener('click', async () => {
       const res = await window.orgtree.chatPickFile();
       if (!res || res.canceled) return;
       if (!res.ok) { C.error = res.error; render(); return; }
       sendServer({ type: 'file', channel: ch, name: res.name, data: res.data });
     });
+    const mic = $('chat-mic');
+    if (mic) mic.addEventListener('click', () => startVoice(ch));
+    const vstop = $('chat-voice-stop');
+    if (vstop) vstop.addEventListener('click', stopVoice);
+    const vcancel = $('chat-voice-cancel');
+    if (vcancel) vcancel.addEventListener('click', cancelVoice);
+    const vsend = $('voice-send');
+    if (vsend) vsend.addEventListener('click', sendVoice);
+    const vdiscard = $('voice-discard');
+    if (vdiscard) vdiscard.addEventListener('click', discardVoice);
     panel.querySelectorAll('.chat-dl').forEach(b => {
       b.addEventListener('click', () => {
         pendingDownloads.add(b.dataset.file);
@@ -815,7 +857,141 @@
     });
     const box = $('chat-msgs');
     box.scrollTop = box.scrollHeight;
-    input.focus();
+    if (input) input.focus();
+  }
+
+  function fmtClock(sec) {
+    const s = Math.max(0, Math.round(sec));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function getTranscribeWorker() {
+    if (!transcribeWorker) transcribeWorker = new Worker('transcribe-worker.js', { type: 'module' });
+    return transcribeWorker;
+  }
+
+  function transcribe(pcm, onProgress) {
+    return new Promise((resolve) => {
+      const id = 't-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const worker = getTranscribeWorker();
+      const handler = (e) => {
+        const m = e.data || {};
+        if (m.id !== id) return;
+        if (m.type === 'progress' && onProgress) onProgress(m.pct);
+        if (m.type === 'result') { worker.removeEventListener('message', handler); resolve(m.text || ''); }
+        if (m.type === 'error') { worker.removeEventListener('message', handler); resolve(''); }
+      };
+      worker.addEventListener('message', handler);
+      worker.postMessage({ id, pcm });
+    });
+  }
+
+  async function blobToPcm16k(blob) {
+    const buf = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      const decoded = await ctx.decodeAudioData(buf);
+      const target = 16000;
+      const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * target), target);
+      const src = off.createBufferSource();
+      src.buffer = decoded;
+      src.connect(off.destination);
+      src.start();
+      const rendered = await off.startRendering();
+      return rendered.getChannelData(0);
+    } finally {
+      ctx.close();
+    }
+  }
+
+  async function startVoice(channel) {
+    if (voiceRec) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (_) {
+      C.error = 'Microphone unavailable — check macOS mic permission for WholeTeam.';
+      render();
+      return;
+    }
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => finishVoice();
+    voiceRec = { recorder, stream, chunks, startTs: Date.now(), channel, timerId: null };
+    voiceRec.timerId = setInterval(() => {
+      const el = $('chat-voice-rec-time');
+      if (el && voiceRec) el.textContent = fmtClock((Date.now() - voiceRec.startTs) / 1000);
+      if (voiceRec && Date.now() - voiceRec.startTs >= 5 * 60 * 1000) stopVoice(); // 5-min cap
+    }, 500);
+    recorder.start(250);
+    renderConvo(); // re-renders compose bar into recording state
+  }
+
+  function stopVoice() {
+    if (!voiceRec) return;
+    clearInterval(voiceRec.timerId);
+    try { voiceRec.recorder.stop(); } catch (_) { /* already stopped */ }
+  }
+
+  function cancelVoice() {
+    if (!voiceRec) return;
+    const rec = voiceRec;
+    voiceRec = null;
+    clearInterval(rec.timerId);
+    rec.recorder.onstop = null;
+    try { rec.recorder.stop(); } catch (_) {}
+    rec.stream.getTracks().forEach(t => t.stop());
+    renderConvo();
+  }
+
+  async function finishVoice() {
+    const rec = voiceRec;
+    if (!rec) return;
+    voiceRec = null;
+    clearInterval(rec.timerId);
+    rec.stream.getTracks().forEach(t => t.stop());
+    const duration = (Date.now() - rec.startTs) / 1000;
+    const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || 'audio/webm' });
+    if (!blob.size || duration < 0.5) { renderConvo(); return; } // empty/accidental
+    voiceReview = { blob, blobUrl: URL.createObjectURL(blob), duration, mime: blob.type, channel: rec.channel, pcm: null, text: null };
+    renderConvo();
+    // transcribe in the background of the review step; never blocks sending
+    try {
+      voiceReview.pcm = await blobToPcm16k(blob);
+      if (!voiceReview) return;
+      const text = await transcribe(voiceReview.pcm, (pct) => {
+        const el = $('voice-transcribing');
+        if (el) el.textContent = 'Downloading speech model (one-time ~40 MB)… ' + pct + '%';
+      });
+      if (voiceReview) { voiceReview.text = text; renderConvo(); }
+    } catch (_) {
+      if (voiceReview) { voiceReview.text = ''; renderConvo(); }
+    }
+  }
+
+  function discardVoice() {
+    if (voiceReview && voiceReview.blobUrl) URL.revokeObjectURL(voiceReview.blobUrl);
+    voiceReview = null;
+    renderConvo();
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
+  }
+
+  async function sendVoice() {
+    const vr = voiceReview;
+    if (!vr) return;
+    const text = ($('voice-transcript') ? $('voice-transcript').value : (vr.text || '')).trim().slice(0, 4000);
+    const data = await blobToBase64(vr.blob);
+    sendServer({ type: 'voice', channel: vr.channel, data, duration: Math.round(vr.duration * 10) / 10, mime: vr.mime, text });
+    discardVoice();
   }
 
   function renderLibrary() {
