@@ -400,6 +400,141 @@ const roster = [
     await s10.stop();
   }
 
+  console.log('\n— voice notes: send, fetch, DM privacy, retention prune —');
+  {
+    const dir4 = fs.mkdtempSync(path.join(os.tmpdir(), 'orgtree-chat-voice-'));
+    const fdir = path.join(dir4, 'files');
+    const s11 = await createChatServer({ port: PORT, roster, filesDir: fdir });
+    const w1 = await client(PORT); await sleep(80);
+    w1.send({ type: 'hello', personId: 'ada' }); await sleep(80);
+    const w2 = await client(PORT); await sleep(80);
+    w2.send({ type: 'hello', personId: 'vic' }); await sleep(80);
+
+    const audio = Buffer.from('fake-opus-audio-bytes').toString('base64');
+    w1.send({ type: 'voice', channel: 'dept:Engineering', data: audio, duration: 12.4, mime: 'audio/webm', text: 'standup moved to ten' });
+    await sleep(200);
+    const vmsg = w2.inbox.find(m => m.type === 'msg' && m.kind === 'voice');
+    ok(!!vmsg, 'voice note arrives as a voice message');
+    eq(vmsg.duration, 12.4, 'duration preserved');
+    eq(vmsg.text, 'standup moved to ten', 'transcript travels as message text');
+    ok(!w2.inbox.some(m => m.type === 'libraryChanged'), 'voice notes never touch the shared library');
+
+    w2.send({ type: 'fileGet', id: vmsg.fileId });
+    await sleep(150);
+    const vdata = w2.inbox.find(m => m.type === 'fileData' && m.id === vmsg.fileId);
+    eq(Buffer.from(vdata.data, 'base64').toString(), 'fake-opus-audio-bytes', 'voice bytes round-trip via fileGet');
+
+    w2.send({ type: 'search', q: 'standup' });
+    await sleep(150);
+    ok(w2.inbox.some(m => m.type === 'searchResults' && m.results.some(r => r.kind === 'voice')), 'transcript is searchable');
+
+    const dm = dmChannel('ada', 'vic');
+    w1.send({ type: 'voice', channel: dm, data: audio, duration: 3, mime: 'audio/webm', text: 'secret note' });
+    await sleep(200);
+    const dmVoice = w1.inbox.filter(m => m.type === 'msg' && m.kind === 'voice' && m.channel === dm).pop();
+    const w3 = await client(PORT); await sleep(80);
+    w3.send({ type: 'hello', personId: 'sam' }); await sleep(80);
+    ok(!w3.inbox.some(m => m.type === 'msg' && m.kind === 'voice'), 'DM voice note not routed to a third person');
+    w3.send({ type: 'fileGet', id: dmVoice.fileId });
+    await sleep(150);
+    ok(!w3.inbox.some(m => m.type === 'fileData'), 'third person cannot fetch DM voice bytes');
+
+    // restart: history-scan fallback still serves bytes for replayed notes —
+    // send a note on a storeFile-backed server, restart with the same
+    // storeFile + filesDir, and fetch the note by its fileId
+    await s11.stop();
+    const rstore = path.join(dir4, 'history.json');
+    const s12 = await createChatServer({ port: PORT, roster, filesDir: fdir, storeFile: rstore });
+    const w4 = await client(PORT); await sleep(80);
+    w4.send({ type: 'hello', personId: 'ada' }); await sleep(80);
+    w4.send({ type: 'voice', channel: 'org', data: audio, duration: 1, mime: 'audio/webm', text: 'after restart' });
+    await sleep(200);
+    const restartNote = w4.inbox.filter(m => m.type === 'msg' && m.kind === 'voice').pop();
+    await s12.stop();
+    const s13 = await createChatServer({ port: PORT, roster, filesDir: fdir, storeFile: rstore });
+    const w5 = await client(PORT); await sleep(80);
+    w5.send({ type: 'hello', personId: 'vic' }); await sleep(80);
+    w5.send({ type: 'fileGet', id: restartNote.fileId });
+    await sleep(150);
+    const rdata = w5.inbox.find(m => m.type === 'fileData' && m.id === restartNote.fileId);
+    eq(Buffer.from(rdata.data, 'base64').toString(), 'fake-opus-audio-bytes', 'voice note fetchable by fileId after server restart');
+    await s13.stop();
+
+    // retention prune deletes voice bytes
+    const sf = path.join(dir4, 'history3.json');
+    const OLD = Date.now() - 10 * 86400000;
+    const staleId = 'v-stale';
+    fs.writeFileSync(path.join(fdir, staleId), 'stale-bytes');
+    fs.writeFileSync(sf, JSON.stringify({
+      org: [{ channel: 'org', from: 'ada', fromName: 'Ada Boss', text: '', ts: OLD, kind: 'voice', fileId: staleId, duration: 5, mime: 'audio/webm' }],
+    }));
+    const s14 = await createChatServer({ port: PORT, roster, filesDir: fdir, storeFile: sf, retentionDays: 7 });
+    await sleep(150);
+    ok(!fs.existsSync(path.join(fdir, staleId)), 'retention prune deletes voice audio bytes from disk');
+    await s14.stop();
+    fs.rmSync(dir4, { recursive: true, force: true });
+  }
+
+  console.log('\n— 1:1 calls: invite, busy, accept, signal, end, disconnect —');
+  {
+    const s15 = await createChatServer({ port: PORT, roster });
+    const a = await client(PORT); await sleep(80);
+    a.send({ type: 'hello', personId: 'ada' }); await sleep(120);
+    const b = await client(PORT); await sleep(80);
+    b.send({ type: 'hello', personId: 'vic' }); await sleep(120);
+    const c = await client(PORT); await sleep(80);
+    c.send({ type: 'hello', personId: 'sam' }); await sleep(120);
+
+    a.send({ type: 'call:invite', to: 'vic' });
+    await sleep(150);
+    ok(b.inbox.some(m => m.type === 'call:invite' && m.from === 'ada'), 'invite relayed to the target');
+    ok(!c.inbox.some(m => m.type && String(m.type).startsWith('call:')), 'invite not leaked to a third person');
+
+    c.send({ type: 'call:invite', to: 'ada' });
+    await sleep(120);
+    // ada has a pending outgoing invite but is not IN a call yet — second invite still allowed? No:
+    // she is engaged (pending). Spec: one call per person incl. pending → busy.
+    ok(c.inbox.some(m => m.type === 'error' && m.error === 'call-busy'), 'pending engagement counts as busy');
+
+    b.send({ type: 'call:accept', to: 'ada' });
+    await sleep(150);
+    ok(a.inbox.some(m => m.type === 'call:accept' && m.from === 'vic'), 'accept relayed to the caller');
+    const busyAda = c.inbox.concat(a.inbox).filter(m => m.type === 'statusChanged' && m.entry && m.entry.personId === 'ada').pop();
+    eq(busyAda.entry.status, 'busy', 'accept auto-marks the caller busy');
+    const busyVic = a.inbox.filter(m => m.type === 'statusChanged' && m.entry && m.entry.personId === 'vic').pop();
+    eq(busyVic.entry.status, 'busy', 'accept auto-marks the callee busy');
+
+    c.send({ type: 'call:invite', to: 'vic' });
+    await sleep(120);
+    ok(c.inbox.some(m => m.type === 'error' && m.error === 'call-busy'), 'active call = busy for new invites');
+
+    a.send({ type: 'call:signal', to: 'vic', data: { kind: 'sdp', sdp: 'offer-blob' } });
+    await sleep(120);
+    ok(b.inbox.some(m => m.type === 'call:signal' && m.from === 'ada' && m.data.sdp === 'offer-blob'), 'signal relayed between the pair');
+    c.send({ type: 'call:signal', to: 'vic', data: { kind: 'sdp', sdp: 'evil' } });
+    await sleep(120);
+    ok(!b.inbox.some(m => m.type === 'call:signal' && m.from === 'sam'), 'outsider signal not relayed');
+
+    a.send({ type: 'call:end', to: 'vic' });
+    await sleep(150);
+    ok(b.inbox.some(m => m.type === 'call:end' && m.from === 'ada'), 'end relayed to the peer');
+    const freeAda = a.inbox.filter(m => m.type === 'statusChanged' && m.entry && m.entry.personId === 'ada').pop();
+    eq(freeAda.entry.status, 'available', 'call end restores available');
+
+    // disconnect mid-call ends it for the peer
+    a.send({ type: 'call:invite', to: 'vic' }); await sleep(120);
+    b.send({ type: 'call:accept', to: 'ada' }); await sleep(120);
+    a.ws.close(); await sleep(250);
+    ok(b.inbox.some(m => m.type === 'call:end' && m.from === 'ada'), 'disconnect mid-call ends it for the peer');
+
+    // invite to offline person
+    b.send({ type: 'call:invite', to: 'nobody' });
+    await sleep(120);
+    ok(b.inbox.some(m => m.type === 'error' && m.error === 'call-offline'), 'offline target rejected');
+
+    await s15.stop();
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`\nChat server all good — ${passed} assertions passed.\n`);
   process.exit(0);

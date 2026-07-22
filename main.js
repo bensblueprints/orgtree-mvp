@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -481,6 +481,18 @@ ipcMain.handle('chat:openLibrary', (_e, label) => {
 ipcMain.handle('chat:openExternal', (_e, url) => {
   if (/^https?:\/\//i.test(String(url))) shell.openExternal(String(url));
   return { ok: true };
+});
+
+ipcMain.handle('chat:desktopSources', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen', 'window'],
+    thumbnailSize: { width: 320, height: 180 },
+  });
+  return sources.map(s => ({
+    id: s.id, name: s.name,
+    kind: s.id.startsWith('screen') ? 'screen' : 'window',
+    thumbnailDataUrl: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL(),
+  }));
 });
 
 // ---------- SMTP invites ----------

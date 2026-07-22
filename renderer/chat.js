@@ -60,6 +60,295 @@
   let lastTimesheetJson = '';
   const pendingDownloads = new Set();
 
+  // ---------- voice notes ----------
+  let voiceRec = null;      // { recorder, stream, chunks, startTs, timerId, channel }
+  let voiceReview = null;   // { blob, blobUrl, duration, mime, pcm, channel, text }
+  let transcribeWorker = null;
+  const voicePending = new Map(); // fileId -> { resolve, mime } for playback fetches
+  const voiceUrlCache = new Map(); // fileId -> object URL for fetched voice notes
+  let voiceAudio = null; // currently playing Audio element
+  let voicePlayingId = null;
+
+  // ---------- 1:1 calls ----------
+  let call = null; // { state: 'outgoing'|'incoming'|'active', peerId, peerName, pc, localStream, videoSender, screenSender, screenStream, startTs, timerId, ringCtx }
+  const overlay = () => $('call-overlay');
+
+  function ringStart() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.06;
+      osc.frequency.value = 880;
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start();
+      const iv = setInterval(() => { try { osc.frequency.value = osc.frequency.value === 880 ? 660 : 880; } catch (_) {} }, 700);
+      call.ringCtx = { ctx, osc, iv };
+    } catch (_) { /* no ring */ }
+  }
+  function ringStop() {
+    if (!call || !call.ringCtx) return;
+    const { ctx, osc, iv } = call.ringCtx;
+    clearInterval(iv);
+    try { osc.stop(); } catch (_) {}
+    try { ctx.close(); } catch (_) {}
+    call.ringCtx = null;
+  }
+
+  function renderCallOverlay() {
+    const el = overlay();
+    if (!el) return;
+    if (!call) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+    el.classList.remove('hidden');
+    const name = esc(call.peerName || 'teammate');
+    if (call.state === 'incoming') {
+      el.innerHTML = `<div class="call-card">
+        <b>${name}</b> is calling…
+        <div class="chat-inline">
+          <button class="btn primary small" id="call-accept" style="flex:1">Accept</button>
+          <button class="btn danger small" id="call-decline" style="flex:1">Decline</button>
+        </div>
+      </div>`;
+      $('call-accept').addEventListener('click', acceptCall);
+      $('call-decline').addEventListener('click', () => { sendServer({ type: 'call:decline', to: call.peerId }); teardownCall(false); });
+    } else if (call.state === 'outgoing') {
+      el.innerHTML = `<div class="call-card">
+        Calling <b>${name}</b>…
+        <button class="btn ghost small" id="call-cancel" style="width:100%">Cancel</button>
+      </div>`;
+      $('call-cancel').addEventListener('click', () => { sendServer({ type: 'call:end', to: call.peerId }); teardownCall(false); });
+    } else {
+      const muted = call.localStream && !call.localStream.getAudioTracks()[0]?.enabled;
+      el.innerHTML = `<div class="call-card active">
+        <div class="call-head"><b>${name}</b><span id="call-timer">${call.startTs ? fmtClock((Date.now() - call.startTs) / 1000) : '0:00'}</span></div>
+        <div class="call-videos">
+          <video id="call-remote" autoplay playsinline></video>
+          <video id="call-local" autoplay playsinline muted></video>
+        </div>
+        <div class="chat-inline">
+          <button class="btn ghost small" id="call-mute">${muted ? 'Unmute' : 'Mute'}</button>
+          <button class="btn ghost small" id="call-video">${call.videoSender ? 'Video off' : 'Video on'}</button>
+          <button class="btn ghost small" id="call-screen">${call.screenSender ? 'Stop sharing' : 'Share screen'}</button>
+          <button class="btn danger small" id="call-hangup">Hang up</button>
+        </div>
+      </div>`;
+      $('call-mute').addEventListener('click', toggleMute);
+      $('call-video').addEventListener('click', toggleVideo);
+      $('call-screen').addEventListener('click', toggleScreen);
+      $('call-hangup').addEventListener('click', () => { sendServer({ type: 'call:end', to: call.peerId }); teardownCall(false); });
+      // innerHTML above destroyed the <video> elements; reattach live streams.
+      const remoteEl = $('call-remote');
+      if (remoteEl && call.remoteStream) remoteEl.srcObject = call.remoteStream;
+      const localEl = $('call-local');
+      if (localEl && call.localStream) localEl.srcObject = call.localStream;
+    }
+  }
+
+  function startOutgoingCall(peerId) {
+    if (call) return;
+    const p = personById(peerId);
+    call = { state: 'outgoing', peerId, peerName: p ? p.name : peerId };
+    sendServer({ type: 'call:invite', to: peerId });
+    renderCallOverlay();
+  }
+
+  async function acceptCall() {
+    if (!call || call.state !== 'incoming') return;
+    sendServer({ type: 'call:accept', to: call.peerId });
+    await startCallMedia(false);
+  }
+
+  function makePeerConnection() {
+    const pc = new RTCPeerConnection();
+    pc.onicecandidate = (e) => {
+      if (e.candidate) sendServer({ type: 'call:signal', to: call.peerId, data: { kind: 'ice', candidate: e.candidate } });
+    };
+    pc.ontrack = (e) => {
+      if (e.streams[0]) call.remoteStream = e.streams[0];
+      const remote = $('call-remote');
+      if (remote && e.streams[0]) remote.srcObject = e.streams[0];
+    };
+    // Perfect negotiation: both sides may offer (video/screenshare toggles);
+    // the polite peer (callee) rolls back on collision.
+    pc.onnegotiationneeded = async () => {
+      try {
+        call.makingOffer = true;
+        await pc.setLocalDescription(await pc.createOffer());
+        sendServer({ type: 'call:signal', to: call.peerId, data: { kind: 'sdp', sdp: pc.localDescription } });
+      } catch (_) { /* glare/teardown race */ } finally {
+        if (call) call.makingOffer = false;
+      }
+    };
+    return pc;
+  }
+
+  async function startCallMedia(isCaller) {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (_) {
+      C.notice = 'Microphone unavailable — check macOS mic permission.';
+      sendServer({ type: 'call:end', to: call.peerId });
+      teardownCall(false);
+      return;
+    }
+    // Teardown may have landed while the permission prompt was pending.
+    if (!call) { stream.getTracks().forEach(t => t.stop()); return; }
+    ringStop();
+    call.state = 'active';
+    call.polite = !isCaller; // callee rolls back on offer collision
+    call.makingOffer = false;
+    call.localStream = stream;
+    call.startTs = Date.now();
+    call.pc = makePeerConnection();
+    stream.getTracks().forEach(t => call.pc.addTrack(t, stream));
+    call.timerId = setInterval(() => {
+      const el = $('call-timer');
+      if (el && call) el.textContent = fmtClock((Date.now() - call.startTs) / 1000);
+    }, 1000);
+    renderCallOverlay();
+    const local = $('call-local');
+    if (local) local.srcObject = stream;
+  }
+
+  async function handleSignal(data) {
+    const pc = call && call.pc;
+    if (!pc || !data) return;
+    try {
+      if (data.kind === 'sdp') {
+        const collision = data.sdp.type === 'offer' && (call.makingOffer || pc.signalingState !== 'stable');
+        if (!call.polite && collision) return; // impolite peer wins the glare
+        if (collision) await pc.setLocalDescription({ type: 'rollback' });
+        await pc.setRemoteDescription(data.sdp);
+        if (data.sdp.type === 'offer') {
+          await pc.setLocalDescription(await pc.createAnswer());
+          sendServer({ type: 'call:signal', to: call.peerId, data: { kind: 'sdp', sdp: pc.localDescription } });
+        }
+      } else if (data.kind === 'ice') {
+        await pc.addIceCandidate(data.candidate);
+      }
+    } catch (_) { /* stale signaling during teardown */ }
+  }
+
+  function toggleMute() {
+    if (!call || !call.localStream) return;
+    const t = call.localStream.getAudioTracks()[0];
+    if (t) t.enabled = !t.enabled;
+    renderCallOverlay();
+  }
+
+  async function toggleVideo() {
+    if (!call || !call.pc) return;
+    if (call.videoSender) {
+      if (call.screenSender) {
+        // Screen share is flowing through the camera sender; stopping it as
+        // if it were the camera would corrupt state. Ask user to stop sharing first.
+        C.notice = 'Stop sharing before turning video off.';
+        render();
+        return;
+      }
+      const track = call.videoSender.track;
+      call.pc.removeTrack(call.videoSender);
+      if (track) track.stop();
+      call.videoSender = null;
+    } else {
+      try {
+        const vs = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (!call || !call.localStream) { vs.getTracks().forEach(t => t.stop()); return; }
+        const track = vs.getVideoTracks()[0];
+        call.localStream.addTrack(track);
+        call.videoSender = call.pc.addTrack(track, call.localStream);
+        const local = $('call-local');
+        if (local) local.srcObject = call.localStream;
+      } catch (_) {
+        C.notice = 'Camera unavailable — check macOS camera permission.';
+        render();
+      }
+    }
+    renderCallOverlay();
+  }
+
+  async function toggleScreen() {
+    if (!call || !call.pc) return;
+    if (call.screenSender) { stopScreenShare(); renderCallOverlay(); return; }
+    let sources;
+    try { sources = await window.orgtree.chatGetSources(); } catch (_) { sources = []; }
+    if (!sources.length) { C.notice = 'No screens or windows to share (check Screen Recording permission).'; render(); return; }
+    const pick = await pickSource(sources);
+    if (!call) return;
+    if (!pick) return;
+    let ss = null;
+    try {
+      ss = await navigator.mediaDevices.getUserMedia({
+        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: pick.id, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 15 } },
+        audio: false,
+      });
+      const track = ss.getVideoTracks()[0];
+      track.onended = () => { if (call && call.screenSender) { stopScreenShare(); renderCallOverlay(); } };
+      if (call.videoSender) {
+        await call.videoSender.replaceTrack(track);
+        call.screenSender = call.videoSender;
+      } else {
+        // Attach to localStream so the remote's ontrack keeps the audio-bearing stream.
+        call.screenSender = call.pc.addTrack(track, call.localStream);
+      }
+      // Only record the stream after the track is actually on the wire, so a
+      // failed replaceTrack/addTrack doesn't leak the capture.
+      call.screenStream = ss;
+    } catch (_) {
+      // Clean up the capture if the track never made it onto the wire.
+      if (ss) ss.getTracks().forEach(t => t.stop());
+      C.notice = 'Screen sharing failed — check Screen Recording permission.';
+      render();
+    }
+    renderCallOverlay();
+  }
+
+  function stopScreenShare() {
+    if (!call || !call.screenSender) return;
+    if (call.screenStream) { call.screenStream.getTracks().forEach(t => t.stop()); call.screenStream = null; }
+    if (call.videoSender && call.screenSender === call.videoSender) {
+      const camTrack = call.localStream.getVideoTracks()[0] || null;
+      call.videoSender.replaceTrack(camTrack).catch(() => {}); // back to camera (or black if camera off)
+      call.screenSender = null;
+    } else {
+      call.pc.removeTrack(call.screenSender);
+      call.screenSender = null;
+    }
+  }
+
+  function pickSource(sources) {
+    return new Promise((resolve) => {
+      const el = overlay();
+      el.classList.remove('hidden');
+      el.innerHTML = `<div class="call-card source-picker">
+        <b>Share what?</b>
+        <div class="source-grid">
+          ${sources.map(s => `<button class="source-item" data-id="${esc(s.id)}">
+            ${s.thumbnailDataUrl ? `<img src="${esc(s.thumbnailDataUrl)}" alt="">` : ''}
+            <span>${esc(s.name)}</span><em>${s.kind}</em>
+          </button>`).join('')}
+        </div>
+        <button class="btn ghost small" id="source-cancel" style="width:100%">Cancel</button>
+      </div>`;
+      el.querySelectorAll('.source-item').forEach(b => b.addEventListener('click', () => { renderCallOverlay(); resolve(sources.find(s => s.id === b.dataset.id)); }));
+      $('source-cancel').addEventListener('click', () => { renderCallOverlay(); resolve(null); });
+    });
+  }
+
+  function teardownCall(notify) {
+    if (!call) return;
+    ringStop();
+    clearInterval(call && call.timerId);
+    if (notify && call.peerId) sendServer({ type: 'call:end', to: call.peerId });
+    if (call.localStream) call.localStream.getTracks().forEach(t => t.stop());
+    if (call.screenStream) call.screenStream.getTracks().forEach(t => t.stop());
+    if (call.pc) { try { call.pc.close(); } catch (_) {} }
+    call = null;
+    renderCallOverlay();
+    if (C.view) render();
+  }
+
   function saveLast(obj) {
     try { localStorage.setItem('orgtree-chat-last', JSON.stringify(obj)); } catch (_) {}
   }
@@ -109,10 +398,11 @@
   }
 
   // green = clocked in, yellow = busy, red = scheduled now but not clocked in,
-  // grey ('off') = outside scheduled hours / no schedule.
+  // grey ('off') = outside scheduled hours / no schedule. Busy wins over clocked-in.
   function dotClass(pid) {
     const e = C.statuses.get(pid);
-    if (e && e.clockedIn) return e.status === 'busy' ? 'busy' : 'on';
+    if (e && e.status === 'busy') return 'busy';
+    if (e && e.clockedIn) return 'on';
     const p = personById(pid);
     if (p && window.OrgtreeAvailability && !OrgtreeAvailability.isEmpty(p.schedule)) {
       const st = OrgtreeAvailability.stateAt(p.schedule, p.timezone, new Date());
@@ -162,6 +452,8 @@
     ws.onclose = () => {
       if (C.ws !== ws) return;
       C.ws = null;
+      resetVoice();
+      teardownCall(false);
       stopActivitySampler();
       const wasIn = ['list', 'convo', 'library', 'profile', 'search'].includes(C.view);
       C.view = 'setup';
@@ -173,6 +465,8 @@
   }
 
   function disconnect(rerender = true) {
+    resetVoice();
+    teardownCall(false);
     stopActivitySampler();
     clearInterval(tsRefreshTimer);
     tsRefreshTimer = null;
@@ -254,6 +548,8 @@
       else if (m.error === 'bad-pin') C.error = 'Wrong PIN.';
       else if (m.error === 'no-pin-set') C.error = 'Set a PIN in My profile first.';
       else if (m.error === 'file-too-large') C.error = 'That file is over the 300 MB share limit.';
+      else if (m.error === 'call-busy') { C.error = 'They are in another call.'; if (call && call.state === 'outgoing') teardownCall(false); }
+      else if (m.error === 'call-offline') { C.error = 'They are not connected right now.'; if (call && call.state === 'outgoing') teardownCall(false); }
       else C.error = m.error;
       if (clockMenuOpen() && (m.error === 'bad-pin' || m.error === 'no-pin-set')) {
         C.tcError = C.error;
@@ -285,6 +581,29 @@
         }
         if (['list', 'availability'].includes(C.view)) render();
       }
+      return;
+    }
+    if (m.type === 'call:invite') {
+      if (call) return; // server enforces busy too; this is belt-and-braces
+      call = { state: 'incoming', peerId: m.from, peerName: m.fromName };
+      ringStart();
+      renderCallOverlay();
+      return;
+    }
+    if (m.type === 'call:cancel' || m.type === 'call:end') {
+      if (call && call.peerId === m.from) { C.notice = 'Call ended.'; teardownCall(false); }
+      return;
+    }
+    if (m.type === 'call:accept') {
+      if (call && call.state === 'outgoing' && call.peerId === m.from) startCallMedia(true);
+      return;
+    }
+    if (m.type === 'call:decline') {
+      if (call && call.state === 'outgoing' && call.peerId === m.from) { C.notice = (call.peerName || 'They') + ' declined the call.'; teardownCall(false); }
+      return;
+    }
+    if (m.type === 'call:signal') {
+      if (call && call.peerId === m.from) handleSignal(m.data);
       return;
     }
     if (m.type === 'history') {
@@ -375,12 +694,21 @@
   }
 
   async function handleFileData(m) {
+    if (voicePending.has(m.id)) {
+      const { resolve, mime } = voicePending.get(m.id);
+      voicePending.delete(m.id);
+      const bytes = Uint8Array.from(atob(m.data), c => c.charCodeAt(0));
+      resolve(URL.createObjectURL(new Blob([bytes], { type: mime || 'audio/webm' })));
+      return;
+    }
     if (pendingDownloads.has(m.id)) {
       pendingDownloads.delete(m.id);
       const res = await window.orgtree.chatSaveFile(m.name, m.data);
       if (res && res.ok) { C.notice = 'Saved: ' + res.path; if (C.open) render(); }
       return;
     }
+    if (m.reason === 'voice') return; // playback fetches never sync to disk
+    if (m.channel.startsWith('dm:')) return; // DM files never sync to disk (mirrors autoSyncChannel)
     const res = await window.orgtree.chatSyncWrite(channelLabel(m.channel), m.name, m.data);
     if (res && res.ok) markSynced(m.id);
   }
@@ -725,6 +1053,7 @@
             <span class="chat-row-sub">${esc(AV.clockInTz(p.timezone, now, tf))} local${workingOn ? ' · working on: ' + esc(workingOn) : ''}</span>
           </span>
           ${pill(st)}
+          ${p.id !== C.you.id ? `<button class="chat-icon-btn avail-call" data-id="${esc(p.id)}" title="Call ${esc(p.name)}"><svg class="icon"><use href="#i-phone"/></svg></button>` : ''}
         </div>
         <div class="avail-track">${segs}<span class="avail-now" style="left:${(nowMin / 1440 * 100).toFixed(2)}%"></span></div>
       </div>`;
@@ -733,6 +1062,7 @@
     panel.innerHTML = html;
     wireCommon();
     $('chat-back').addEventListener('click', () => { C.view = 'list'; render(); });
+    panel.querySelectorAll('.avail-call').forEach(b => b.addEventListener('click', () => startOutgoingCall(b.dataset.id)));
   }
 
   function openChannel(ch) {
@@ -763,7 +1093,14 @@
       lastFrom = m.from; lastTs = m.ts;
       const time = OrgtreeAvailability.clockInTz(undefined, new Date(m.ts), (C.you && C.you.timeFormat) || '12h');
       let bubble;
-      if (m.kind === 'file') {
+      if (m.kind === 'voice') {
+        bubble = `<div class="chat-bubble voice">
+          <button class="chat-voice-play" data-file="${esc(m.fileId)}" data-mime="${esc(m.mime)}" title="Play voice note"><svg class="icon"><use href="#i-play"/></svg></button>
+          <span class="chat-voice-track"><span class="chat-voice-fill" id="vf-${esc(m.fileId)}"></span></span>
+          <span class="chat-voice-time" id="vt-${esc(m.fileId)}">${fmtClock(m.duration)}</span>
+          ${m.text ? `<div class="chat-voice-text">${esc(m.text)}</div>` : ''}
+        </div>`;
+      } else if (m.kind === 'file') {
         bubble = `<div class="chat-bubble file">
           <svg class="icon"><use href="#i-paperclip"/></svg>
           <span class="chat-file-main"><b>${esc(m.fileName)}</b><span>${fmtSize(m.size)}${synced.has(m.fileId) ? ' · synced to your library folder' : ''}</span></span>
@@ -780,42 +1117,276 @@
     if (!msgs.length) bodyHtml = `<div class="chat-hint">No messages yet in ${esc(channelLabel(ch))}. Say something.</div>`;
 
     const libBtn = isDm ? '' : `<button class="chat-icon-btn" id="chat-lib" title="Channel library (files & links)"><svg class="icon"><use href="#i-lib"/></svg></button>`;
+    const callBtn = isDm ? `<button class="chat-icon-btn" id="chat-call" title="Start a call"><svg class="icon"><use href="#i-phone"/></svg></button>` : '';
 
-    panel.innerHTML = header((isDm ? '' : '#') + channelLabel(ch), { back: true, sub: subBits.join(' · '), buttons: libBtn }) + `
-      <div class="chat-body chat-msgs" id="chat-msgs">${errLine()}${bodyHtml}</div>
-      <div class="chat-compose">
+    let compose;
+    if (voiceRec) {
+      compose = `<div class="chat-compose voice-rec">
+        <span class="chat-voice-dot"></span>
+        <span id="chat-voice-rec-time">${fmtClock((Date.now() - voiceRec.startTs) / 1000)}</span>
+        <button class="btn primary small" id="chat-voice-stop" style="flex:1">Stop &amp; review</button>
+        <button class="btn ghost small" id="chat-voice-cancel">Cancel</button>
+      </div>`;
+    } else if (voiceReview) {
+      compose = `<div class="chat-compose voice-review">
+        <audio id="voice-audio" controls src="${esc(voiceReview.blobUrl)}"></audio>
+        <div class="chat-voice-meta">${fmtClock(voiceReview.duration)}${voiceReview.text === null ? ' · <span id="voice-transcribing">Transcribing…</span>' : ''}</div>
+        <textarea id="voice-transcript" rows="2" maxlength="4000" placeholder="Transcript (editable) — becomes searchable text">${esc(voiceReview.text || '')}</textarea>
+        <div class="chat-inline">
+          <button class="btn ghost small" id="voice-discard" style="flex:1">Discard</button>
+          <button class="btn primary small" id="voice-send" style="flex:1">Send voice note</button>
+        </div>
+      </div>`;
+    } else {
+      compose = `<div class="chat-compose">
         <button class="btn ghost icon-only" id="chat-attach" title="Share a file (goes to the ${esc(channelLabel(ch))} library)"><svg class="icon"><use href="#i-paperclip"/></svg></button>
+        <button class="btn ghost icon-only" id="chat-mic" title="Record a voice note"><svg class="icon"><use href="#i-mic"/></svg></button>
         <input type="text" id="chat-input" placeholder="Message ${esc(channelLabel(ch))}…" maxlength="4000" autocomplete="off">
         <button class="btn primary icon-only" id="chat-send" title="Send"><svg class="icon"><use href="#i-send"/></svg></button>
       </div>`;
+    }
+
+    panel.innerHTML = header((isDm ? '' : '#') + channelLabel(ch), { back: true, sub: subBits.join(' · '), buttons: libBtn + callBtn }) + `
+      <div class="chat-body chat-msgs" id="chat-msgs">${errLine()}${bodyHtml}</div>
+      ${compose}`;
     wireCommon();
-    $('chat-back').addEventListener('click', () => { C.view = 'list'; C.current = null; render(); });
-    if (!isDm) $('chat-lib').addEventListener('click', () => { C.backView = 'convo'; C.view = 'library'; render(); });
+    $('chat-back').addEventListener('click', () => { resetVoice(); C.view = 'list'; C.current = null; render(); });
+    if (!isDm) $('chat-lib').addEventListener('click', () => { resetVoice(); C.backView = 'convo'; C.view = 'library'; render(); });
+    const callb = $('chat-call');
+    if (callb) callb.addEventListener('click', () => startOutgoingCall(otherId));
     const input = $('chat-input');
-    const send = () => {
-      const text = input.value.trim();
-      if (!text) return;
-      sendServer({ type: 'msg', channel: ch, text });
-      input.value = '';
-      input.focus();
-    };
-    $('chat-send').addEventListener('click', send);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-    $('chat-attach').addEventListener('click', async () => {
+    if (input) {
+      const send = () => {
+        const text = input.value.trim();
+        if (!text) return;
+        sendServer({ type: 'msg', channel: ch, text });
+        input.value = '';
+        input.focus();
+      };
+      $('chat-send').addEventListener('click', send);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+    }
+    const attach = $('chat-attach');
+    if (attach) attach.addEventListener('click', async () => {
       const res = await window.orgtree.chatPickFile();
       if (!res || res.canceled) return;
       if (!res.ok) { C.error = res.error; render(); return; }
       sendServer({ type: 'file', channel: ch, name: res.name, data: res.data });
     });
+    const mic = $('chat-mic');
+    if (mic) mic.addEventListener('click', () => startVoice(ch));
+    const vstop = $('chat-voice-stop');
+    if (vstop) vstop.addEventListener('click', stopVoice);
+    const vcancel = $('chat-voice-cancel');
+    if (vcancel) vcancel.addEventListener('click', cancelVoice);
+    const vsend = $('voice-send');
+    if (vsend) vsend.addEventListener('click', sendVoice);
+    const vdiscard = $('voice-discard');
+    if (vdiscard) vdiscard.addEventListener('click', discardVoice);
     panel.querySelectorAll('.chat-dl').forEach(b => {
       b.addEventListener('click', () => {
         pendingDownloads.add(b.dataset.file);
         sendServer({ type: 'fileGet', id: b.dataset.file, reason: 'download' });
       });
     });
+    panel.querySelectorAll('.chat-voice-play').forEach(b => {
+      b.addEventListener('click', () => playVoice(b.dataset.file, b.dataset.mime, b));
+    });
     const box = $('chat-msgs');
     box.scrollTop = box.scrollHeight;
-    input.focus();
+    if (input) input.focus();
+  }
+
+  function fmtClock(sec) {
+    const s = Math.max(0, Math.round(sec));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function playVoice(fileId, mime, btn) {
+    const start = (url) => {
+      if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; voicePlayingId = null; }
+      const audio = new Audio(url);
+      voiceAudio = audio; voicePlayingId = fileId;
+      const fill = $('vf-' + fileId);
+      const time = $('vt-' + fileId);
+      audio.ontimeupdate = () => {
+        if (time) time.textContent = fmtClock(audio.currentTime) + ' / ' + fmtClock(audio.duration || 0);
+        if (fill && audio.duration) fill.style.width = (audio.currentTime / audio.duration * 100).toFixed(1) + '%';
+      };
+      audio.onended = () => { voiceAudio = null; voicePlayingId = null; };
+      audio.play();
+    };
+    if (voicePlayingId === fileId && voiceAudio) { voiceAudio.pause(); voiceAudio = null; voicePlayingId = null; return; }
+    const cached = voiceUrlCache.get(fileId);
+    if (cached) { start(cached); return; }
+    btn.disabled = true;
+    new Promise((resolve) => {
+      voicePending.set(fileId, { resolve, mime });
+      sendServer({ type: 'fileGet', id: fileId, reason: 'voice' });
+    }).then((url) => { voiceUrlCache.set(fileId, url); btn.disabled = false; start(url); });
+  }
+
+  function getTranscribeWorker() {
+    if (!transcribeWorker) transcribeWorker = new Worker('transcribe-worker.js', { type: 'module' });
+    return transcribeWorker;
+  }
+
+  function transcribe(pcm, onProgress) {
+    return new Promise((resolve) => {
+      const id = 't-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const worker = getTranscribeWorker();
+      const cleanup = () => {
+        worker.removeEventListener('message', handler);
+        worker.removeEventListener('error', onErr);
+      };
+      const handler = (e) => {
+        const m = e.data || {};
+        if (m.id !== id) return;
+        if (m.type === 'progress' && onProgress) onProgress(m.pct);
+        if (m.type === 'result') { cleanup(); resolve(m.text || ''); }
+        if (m.type === 'error') { cleanup(); resolve(''); }
+      };
+      // worker-level failure (module import/CSP block): settle so "Transcribing…" can't hang forever;
+      // drop the cached worker so the next note builds a fresh one
+      const onErr = () => { cleanup(); transcribeWorker = null; resolve(''); };
+      worker.addEventListener('message', handler);
+      worker.addEventListener('error', onErr);
+      worker.postMessage({ id, pcm });
+    });
+  }
+
+  async function blobToPcm16k(blob) {
+    const buf = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      const decoded = await ctx.decodeAudioData(buf);
+      const target = 16000;
+      const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * target), target);
+      const src = off.createBufferSource();
+      src.buffer = decoded;
+      src.connect(off.destination);
+      src.start();
+      const rendered = await off.startRendering();
+      return rendered.getChannelData(0);
+    } finally {
+      ctx.close();
+    }
+  }
+
+  async function startVoice(channel) {
+    if (voiceRec) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (_) {
+      C.error = 'Microphone unavailable — check macOS mic permission for WholeTeam.';
+      render();
+      return;
+    }
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => finishVoice();
+    voiceRec = { recorder, stream, chunks, startTs: Date.now(), channel, timerId: null };
+    voiceRec.timerId = setInterval(() => {
+      const el = $('chat-voice-rec-time');
+      if (el && voiceRec) el.textContent = fmtClock((Date.now() - voiceRec.startTs) / 1000);
+      if (voiceRec && Date.now() - voiceRec.startTs >= 5 * 60 * 1000) stopVoice(); // 5-min cap
+    }, 500);
+    recorder.start(250);
+    renderConvo(); // re-renders compose bar into recording state
+  }
+
+  function stopVoice() {
+    if (!voiceRec) return;
+    clearInterval(voiceRec.timerId);
+    try { voiceRec.recorder.stop(); } catch (_) { /* already stopped */ }
+  }
+
+  function cancelVoice() {
+    if (!voiceRec) return;
+    const rec = voiceRec;
+    voiceRec = null;
+    clearInterval(rec.timerId);
+    rec.recorder.onstop = null;
+    try { rec.recorder.stop(); } catch (_) {}
+    rec.stream.getTracks().forEach(t => t.stop());
+    renderConvo();
+  }
+
+  // tear down any in-flight recording or pending review (navigation/disconnect); callers re-render
+  function resetVoice() {
+    if (voiceRec) {
+      clearInterval(voiceRec.timerId);
+      voiceRec.recorder.onstop = null;
+      try { voiceRec.recorder.stop(); } catch (_) {}
+      voiceRec.stream.getTracks().forEach(t => t.stop());
+      voiceRec = null;
+    }
+    if (voiceReview) {
+      if (voiceReview.blobUrl) URL.revokeObjectURL(voiceReview.blobUrl);
+      voiceReview = null;
+    }
+  }
+
+  async function finishVoice() {
+    const rec = voiceRec;
+    if (!rec) return;
+    voiceRec = null;
+    clearInterval(rec.timerId);
+    rec.stream.getTracks().forEach(t => t.stop());
+    const duration = (Date.now() - rec.startTs) / 1000;
+    const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || 'audio/webm' });
+    if (!blob.size || duration < 0.5) { renderConvo(); return; } // empty/accidental
+    voiceReview = { blob, blobUrl: URL.createObjectURL(blob), duration, mime: blob.type, channel: rec.channel, pcm: null, text: null };
+    const vr = voiceReview;
+    renderConvo();
+    // transcribe in the background of the review step; never blocks sending
+    try {
+      const pcm = await blobToPcm16k(blob);
+      if (voiceReview !== vr) return; // discarded/superseded while decoding
+      vr.pcm = pcm;
+      const text = await transcribe(pcm, (pct) => {
+        const el = $('voice-transcribing');
+        if (el) el.textContent = 'Downloading speech model (one-time ~40 MB)… ' + pct + '%';
+      });
+      if (voiceReview !== vr) return; // discarded/superseded while transcribing
+      // update the DOM in place so in-progress edits in the textarea survive
+      vr.text = text;
+      const ta = $('voice-transcript');
+      if (ta) ta.value = text;
+      const spinner = $('voice-transcribing');
+      if (spinner) spinner.remove();
+    } catch (_) {
+      if (voiceReview !== vr) return;
+      vr.text = '';
+      const spinner = $('voice-transcribing');
+      if (spinner) spinner.remove();
+    }
+  }
+
+  function discardVoice() {
+    if (voiceReview && voiceReview.blobUrl) URL.revokeObjectURL(voiceReview.blobUrl);
+    voiceReview = null;
+    renderConvo();
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
+  }
+
+  async function sendVoice() {
+    const vr = voiceReview;
+    if (!vr) return;
+    const text = ($('voice-transcript') ? $('voice-transcript').value : (vr.text || '')).trim().slice(0, 4000);
+    const data = await blobToBase64(vr.blob);
+    sendServer({ type: 'voice', channel: vr.channel, data, duration: Math.round(vr.duration * 10) / 10, mime: vr.mime, text });
+    discardVoice();
   }
 
   function renderLibrary() {
@@ -888,7 +1459,7 @@
         <span class="chat-hash">${m.channel.startsWith('dm:') ? '@' : '#'}</span>
         <span class="chat-row-main">
           <span class="chat-row-name">${esc(channelLabel(m.channel))} · ${esc(m.fromName)} · ${new Date(m.ts).toLocaleDateString()}</span>
-          <span class="chat-row-sub">${esc(m.kind === 'file' ? '[file] ' + m.fileName : m.text)}</span>
+          <span class="chat-row-sub">${esc(m.kind === 'file' ? '[file] ' + m.fileName : m.kind === 'voice' ? '[voice note] ' + (m.text || '') : m.text)}</span>
         </span>
       </button>`;
     }

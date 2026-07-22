@@ -33,6 +33,7 @@ const TEXT_CAP = 4000;                // chars per message
 // Practical ceiling of the JSON-over-websocket transfer (V8 max string length
 // caps the base64 payload around 512MB). Streaming transfer lifts this later.
 const FILE_CAP = 300 * 1024 * 1024;   // bytes per shared file
+const VOICE_CAP = 8 * 1024 * 1024;     // bytes per voice note (~5 min opus)
 const LIBRARY_CAP = 2000;             // entries overall
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/g;
 
@@ -130,8 +131,11 @@ function createChatServer({
   function pruneChannel(ch) {
     const cutoff = cutoffTs();
     if (!cutoff || !history[ch]) return;
+    const pruned = history[ch].filter(m => m.ts < cutoff);
     const kept = history[ch].filter(m => m.ts >= cutoff);
     if (kept.length !== history[ch].length) {
+      // Voice notes are messages, not documents: their bytes die with them.
+      for (const m of pruned) if (m.kind === 'voice' && m.fileId) deleteFileData(m.fileId);
       if (kept.length) history[ch] = kept; else delete history[ch];
       persist();
     }
@@ -218,6 +222,45 @@ function createChatServer({
   }
   const statusList = () => minimalRoster.map(p => statusEntry(p.id));
   const pushStatus = (personId) => broadcast({ type: 'statusChanged', entry: statusEntry(personId) });
+
+  // ----- 1:1 calls (signaling relay only — media is peer-to-peer) -----
+  const pendingCalls = new Map(); // callerId -> calleeId
+  const activeCalls = new Map();  // personId -> peerId (both directions)
+  function sendToPerson(pid, obj) {
+    for (const [sock, inf] of conns) if (inf.personId === pid) { send(sock, obj); return true; }
+    return false;
+  }
+  function engaged(pid) { return activeCalls.has(pid) || pendingCalls.has(pid) || [...pendingCalls.values()].includes(pid); }
+  function setBusy(pid, busy) {
+    const s = statuses.get(pid) || {};
+    s.status = busy ? 'busy' : undefined;
+    statuses.set(pid, s);
+    pushStatus(pid);
+  }
+  function clearEngagement(pid, notifyType) {
+    // Pending invite where pid is the caller
+    const callee = pendingCalls.get(pid);
+    if (callee) {
+      pendingCalls.delete(pid);
+      if (notifyType) sendToPerson(callee, { type: notifyType, from: pid });
+    }
+    // Pending invite where pid is the callee
+    for (const [caller, c2] of [...pendingCalls]) {
+      if (c2 === pid) {
+        pendingCalls.delete(caller);
+        if (notifyType) sendToPerson(caller, { type: notifyType, from: pid });
+      }
+    }
+    // Active call
+    const peer = activeCalls.get(pid);
+    if (peer != null) {
+      activeCalls.delete(pid);
+      activeCalls.delete(peer);
+      if (notifyType) sendToPerson(peer, { type: notifyType, from: pid });
+      setBusy(pid, false);
+      setBusy(peer, false);
+    }
+  }
   let departments = [...new Set(minimalRoster.map(p => p.department).filter(Boolean))].sort();
   let channels = [
     { id: 'org', label: 'Everyone' },
@@ -250,7 +293,13 @@ function createChatServer({
 
   function pushMsg(channel, msg) {
     (history[channel] = history[channel] || []).push(msg);
-    if (history[channel].length > HISTORY_CAP) history[channel] = history[channel].slice(-HISTORY_CAP);
+    if (history[channel].length > HISTORY_CAP) {
+      // Voice notes are messages, not documents: their bytes die with them.
+      for (const m of history[channel].slice(0, history[channel].length - HISTORY_CAP)) {
+        if (m.kind === 'voice' && m.fileId) deleteFileData(m.fileId);
+      }
+      history[channel] = history[channel].slice(-HISTORY_CAP);
+    }
     persist();
   }
 
@@ -352,6 +401,28 @@ function createChatServer({
         return;
       }
 
+      if (m.type === 'voice') {
+        const channel = String(m.channel || '');
+        if (!channel) return;
+        if (channel.startsWith('dm:') && !dmMembers(channel).includes(info.personId)) return;
+        let buf;
+        try { buf = Buffer.from(String(m.data || ''), 'base64'); } catch (_) { return; }
+        if (!buf.length) return;
+        if (buf.length > VOICE_CAP) { send(ws, { type: 'error', error: 'voice-too-large' }); return; }
+        const id = 'v-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+        try { storeFileData(id, buf); } catch (err) { send(ws, { type: 'error', error: 'file-store-failed' }); return; }
+        const msg = {
+          channel, from: info.personId, fromName: info.name, ts: Date.now(),
+          kind: 'voice', fileId: id,
+          duration: Math.min(Math.max(0, Number(m.duration) || 0), 600),
+          mime: String(m.mime || 'audio/webm').slice(0, 60),
+          text: String(m.text || '').slice(0, TEXT_CAP).trim(),
+        };
+        pushMsg(channel, msg);
+        routeToChannel(channel, { type: 'msg', ...msg });
+        return;
+      }
+
       if (m.type === 'profile') {
         // Employees update their OWN contact details only (see PROFILE_FIELDS).
         const fields = {};
@@ -426,6 +497,54 @@ function createChatServer({
         return;
       }
 
+      if (m.type === 'call:invite') {
+        const to = String(m.to || '');
+        if (!to || to === info.personId) return;
+        if (!minimalRoster.some(p => p.id === to)) { send(ws, { type: 'error', error: 'call-offline' }); return; }
+        if (engaged(info.personId) || engaged(to)) { send(ws, { type: 'error', error: 'call-busy' }); return; }
+        if (!sendToPerson(to, { type: 'call:invite', from: info.personId, fromName: info.name })) {
+          send(ws, { type: 'error', error: 'call-offline' });
+          return;
+        }
+        pendingCalls.set(info.personId, to);
+        return;
+      }
+
+      if (m.type === 'call:accept') {
+        const caller = String(m.to || '');
+        if (pendingCalls.get(caller) !== info.personId) return;
+        pendingCalls.delete(caller);
+        activeCalls.set(caller, info.personId);
+        activeCalls.set(info.personId, caller);
+        sendToPerson(caller, { type: 'call:accept', from: info.personId });
+        setBusy(caller, true);
+        setBusy(info.personId, true);
+        return;
+      }
+
+      if (m.type === 'call:decline') {
+        const caller = String(m.to || '');
+        if (pendingCalls.get(caller) !== info.personId) return;
+        pendingCalls.delete(caller);
+        sendToPerson(caller, { type: 'call:decline', from: info.personId });
+        return;
+      }
+
+      if (m.type === 'call:end') {
+        const peer = String(m.to || '');
+        if (activeCalls.get(info.personId) === peer || pendingCalls.get(info.personId) === peer) {
+          clearEngagement(info.personId, 'call:end');
+        }
+        return;
+      }
+
+      if (m.type === 'call:signal') {
+        const to = String(m.to || '');
+        if (activeCalls.get(info.personId) !== to) return; // only paired parties
+        sendToPerson(to, { type: 'call:signal', from: info.personId, data: m.data });
+        return;
+      }
+
       if (m.type === 'activity') {
         // Idle-derived activity sample from a clocked-in client. Counts only —
         // no keystrokes or content are ever transmitted.
@@ -469,12 +588,25 @@ function createChatServer({
       }
 
       if (m.type === 'fileGet') {
-        const entry = library.find(e => e.id === String(m.id) && e.kind === 'file');
-        if (!entry || !canAccess(info, entry)) { send(ws, { type: 'error', error: 'file-not-found' }); return; }
-        const buf = readFileData(entry.id);
+        const id = String(m.id);
+        const entry = library.find(e => e.id === id && e.kind === 'file');
+        let voiceMsg = null;
+        if (!entry) {
+          for (const msgs of Object.values(history)) {
+            voiceMsg = msgs.find(x => x.kind === 'voice' && x.fileId === id);
+            if (voiceMsg) break;
+          }
+        }
+        if (!entry && !voiceMsg) { send(ws, { type: 'error', error: 'file-not-found' }); return; }
+        if (!canAccess(info, { channel: entry ? entry.channel : voiceMsg.channel })) {
+          send(ws, { type: 'error', error: 'file-not-found' });
+          return;
+        }
+        const buf = readFileData(id);
         if (!buf) { send(ws, { type: 'error', error: 'file-not-found' }); return; }
         send(ws, {
-          type: 'fileData', id: entry.id, name: entry.name, channel: entry.channel,
+          type: 'fileData', id, name: entry ? entry.name : 'voice-note.webm',
+          channel: entry ? entry.channel : voiceMsg.channel,
           reason: m.reason || 'download', data: buf.toString('base64'),
         });
         return;
@@ -511,6 +643,7 @@ function createChatServer({
         closeSession(info.personId); // disconnect = automatic clock-out
         statuses.delete(info.personId); // working-on line and busy die with the session
         pushStatus(info.personId);
+        clearEngagement(info.personId, 'call:end');
       }
       if (conns.delete(ws)) broadcast({ type: 'presence', online: online() });
     });

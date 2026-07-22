@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('orgtree', {
   chatSyncWrite: (label, name, data) => ipcRenderer.invoke('chat:syncWrite', label, name, data),
   chatOpenLibrary: (label) => ipcRenderer.invoke('chat:openLibrary', label),
   chatOpenExternal: (url) => ipcRenderer.invoke('chat:openExternal', url),
+  chatGetSources: () => ipcRenderer.invoke('chat:desktopSources'),
   smtpGet: () => ipcRenderer.invoke('smtp:get'),
   smtpSave: (smtp) => ipcRenderer.invoke('smtp:save', smtp),
   smtpTest: () => ipcRenderer.invoke('smtp:test'),
