@@ -200,8 +200,8 @@ function createChatServer({
       }));
   }
   let minimalRoster = buildMinimalRoster(roster);
-  const departments = [...new Set(minimalRoster.map(p => p.department).filter(Boolean))].sort();
-  const channels = [
+  let departments = [...new Set(minimalRoster.map(p => p.department).filter(Boolean))].sort();
+  let channels = [
     { id: 'org', label: 'Everyone' },
     ...departments.map(d => ({ id: 'dept:' + d, label: d })),
   ];
@@ -476,9 +476,16 @@ function createChatServer({
         clientCount: () => conns.size,
         /** Host chart changed (person deleted/edited/added): refresh the live
          *  roster, kick connections for removed people, close their clock
-         *  sessions, and push fresh timesheets to admins immediately. */
+         *  sessions, push the new roster to every socket (even joiners who
+         *  haven't picked an identity yet), and push fresh timesheets to
+         *  admins immediately. */
         updateRoster: (newRoster) => {
           minimalRoster = buildMinimalRoster(newRoster || []);
+          departments = [...new Set(minimalRoster.map(p => p.department).filter(Boolean))].sort();
+          channels = [
+            { id: 'org', label: 'Everyone' },
+            ...departments.map(d => ({ id: 'dept:' + d, label: d })),
+          ];
           pinHashes.clear();
           for (const p of newRoster || []) pinHashes.set(p.id, p.pinHash || null);
           const validIds = new Set(minimalRoster.map(p => p.id));
@@ -487,6 +494,11 @@ function createChatServer({
               closeSession(info.personId);
               try { ws.close(); } catch (_) { /* gone */ }
             }
+          }
+          // Push the fresh roster to every socket — including joiners still on
+          // the "Who are you?" screen, who have no identity in `conns` yet.
+          for (const ws of wss.clients) {
+            send(ws, { type: 'rosterSync', roster: minimalRoster, channels, taken: online(), retentionDays });
           }
           for (const [ws, info] of conns) {
             if (info.admin && validIds.has(info.personId)) {

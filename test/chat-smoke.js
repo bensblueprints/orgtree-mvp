@@ -159,6 +159,31 @@ const roster = [
     await s8.stop();
   }
 
+  console.log('\n— chart edits reach connected clients (new member appears for pickers) —');
+  {
+    const s9 = await createChatServer({ port: PORT, roster });
+    const picker = await client(PORT); await sleep(120); // connected, still on "Who are you?"
+    const member = await client(PORT); await sleep(80);
+    member.send({ type: 'hello', personId: 'ada' }); await sleep(120);
+
+    // Host adds a brand-new person (new department too) while everyone is connected.
+    s9.updateRoster(roster.concat([{ id: 'newb', name: 'New Hire', title: 'Intern', department: 'Design' }]));
+    await sleep(250);
+
+    const pickerSync = picker.inbox.filter(m => m.type === 'rosterSync').pop();
+    ok(!!pickerSync, 'unidentified picker is pushed a rosterSync when the chart changes');
+    ok(pickerSync && pickerSync.roster.some(p => p.id === 'newb'), 'picker sees the newly added member without reconnecting');
+    ok(pickerSync && pickerSync.channels.some(c => c.id === 'dept:Design'), 'new department channel is included in the push');
+    const memberSync = member.inbox.filter(m => m.type === 'rosterSync').pop();
+    ok(!!memberSync && memberSync.roster.some(p => p.id === 'newb'), 'identified members also get the fresh roster');
+
+    picker.send({ type: 'hello', personId: 'newb' });
+    await sleep(150);
+    ok(picker.inbox.some(m => m.type === 'welcome' && m.you.id === 'newb'), 'new member can be picked immediately after the push');
+
+    await s9.stop();
+  }
+
   console.log('\n— restart: history survives —');
   const server2 = await createChatServer({ port: PORT, roster, storeFile });
   const d = await client(PORT);

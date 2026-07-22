@@ -182,6 +182,15 @@
       render();
       return;
     }
+    if (m.type === 'rosterSync') {
+      // Host edited the chart while we were connected — refresh the picker and
+      // channel list without kicking the user out of their current view.
+      C.roster = m.roster || [];
+      C.channels = m.channels || [];
+      C.taken = m.taken || [];
+      if (['pick', 'list'].includes(C.view)) render();
+      return;
+    }
     if (m.type === 'welcome') {
       C.you = m.you;
       C.online = m.online || [];
