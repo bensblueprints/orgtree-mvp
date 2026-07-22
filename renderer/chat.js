@@ -69,6 +69,184 @@
   let voiceAudio = null; // currently playing Audio element
   let voicePlayingId = null;
 
+  // ---------- 1:1 calls ----------
+  let call = null; // { state: 'outgoing'|'incoming'|'active', peerId, peerName, pc, localStream, videoSender, screenSender, screenStream, startTs, timerId, ringCtx }
+  const overlay = () => $('call-overlay');
+
+  function ringStart() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.06;
+      osc.frequency.value = 880;
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start();
+      const iv = setInterval(() => { try { osc.frequency.value = osc.frequency.value === 880 ? 660 : 880; } catch (_) {} }, 700);
+      call.ringCtx = { ctx, osc, iv };
+    } catch (_) { /* no ring */ }
+  }
+  function ringStop() {
+    if (!call || !call.ringCtx) return;
+    const { ctx, osc, iv } = call.ringCtx;
+    clearInterval(iv);
+    try { osc.stop(); } catch (_) {}
+    try { ctx.close(); } catch (_) {}
+    call.ringCtx = null;
+  }
+
+  function renderCallOverlay() {
+    const el = overlay();
+    if (!el) return;
+    if (!call) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+    el.classList.remove('hidden');
+    const name = esc(call.peerName || 'teammate');
+    if (call.state === 'incoming') {
+      el.innerHTML = `<div class="call-card">
+        <b>${name}</b> is calling…
+        <div class="chat-inline">
+          <button class="btn primary small" id="call-accept" style="flex:1">Accept</button>
+          <button class="btn danger small" id="call-decline" style="flex:1">Decline</button>
+        </div>
+      </div>`;
+      $('call-accept').addEventListener('click', acceptCall);
+      $('call-decline').addEventListener('click', () => { sendServer({ type: 'call:decline', to: call.peerId }); teardownCall(false); });
+    } else if (call.state === 'outgoing') {
+      el.innerHTML = `<div class="call-card">
+        Calling <b>${name}</b>…
+        <button class="btn ghost small" id="call-cancel" style="width:100%">Cancel</button>
+      </div>`;
+      $('call-cancel').addEventListener('click', () => { sendServer({ type: 'call:end', to: call.peerId }); teardownCall(false); });
+    } else {
+      const muted = call.localStream && !call.localStream.getAudioTracks()[0].enabled;
+      el.innerHTML = `<div class="call-card active">
+        <div class="call-head"><b>${name}</b><span id="call-timer">${call.startTs ? fmtClock((Date.now() - call.startTs) / 1000) : '0:00'}</span></div>
+        <div class="call-videos">
+          <video id="call-remote" autoplay playsinline></video>
+          <video id="call-local" autoplay playsinline muted></video>
+        </div>
+        <div class="chat-inline">
+          <button class="btn ghost small" id="call-mute">${muted ? 'Unmute' : 'Mute'}</button>
+          <button class="btn ghost small" id="call-video">${call.videoSender ? 'Video off' : 'Video on'}</button>
+          <button class="btn ghost small" id="call-screen">${call.screenSender ? 'Stop sharing' : 'Share screen'}</button>
+          <button class="btn danger small" id="call-hangup">Hang up</button>
+        </div>
+      </div>`;
+      $('call-mute').addEventListener('click', toggleMute);
+      $('call-video').addEventListener('click', toggleVideo);
+      $('call-screen').addEventListener('click', toggleScreen);
+      $('call-hangup').addEventListener('click', () => { sendServer({ type: 'call:end', to: call.peerId }); teardownCall(false); });
+    }
+  }
+
+  function startOutgoingCall(peerId) {
+    if (call) return;
+    const p = personById(peerId);
+    call = { state: 'outgoing', peerId, peerName: p ? p.name : peerId };
+    sendServer({ type: 'call:invite', to: peerId });
+    renderCallOverlay();
+  }
+
+  async function acceptCall() {
+    if (!call || call.state !== 'incoming') return;
+    sendServer({ type: 'call:accept', to: call.peerId });
+    await startCallMedia(false);
+  }
+
+  function makePeerConnection() {
+    const pc = new RTCPeerConnection();
+    pc.onicecandidate = (e) => {
+      if (e.candidate) sendServer({ type: 'call:signal', to: call.peerId, data: { kind: 'ice', candidate: e.candidate } });
+    };
+    pc.ontrack = (e) => {
+      const remote = $('call-remote');
+      if (remote && e.streams[0]) remote.srcObject = e.streams[0];
+    };
+    // Perfect negotiation: both sides may offer (video/screenshare toggles);
+    // the polite peer (callee) rolls back on collision.
+    pc.onnegotiationneeded = async () => {
+      try {
+        call.makingOffer = true;
+        await pc.setLocalDescription(await pc.createOffer());
+        sendServer({ type: 'call:signal', to: call.peerId, data: { kind: 'sdp', sdp: pc.localDescription } });
+      } catch (_) { /* glare/teardown race */ } finally {
+        if (call) call.makingOffer = false;
+      }
+    };
+    return pc;
+  }
+
+  async function startCallMedia(isCaller) {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (_) {
+      C.notice = 'Microphone unavailable — check macOS mic permission.';
+      sendServer({ type: 'call:end', to: call.peerId });
+      teardownCall(false);
+      return;
+    }
+    ringStop();
+    call.state = 'active';
+    call.polite = !isCaller; // callee rolls back on offer collision
+    call.makingOffer = false;
+    call.localStream = stream;
+    call.startTs = Date.now();
+    call.pc = makePeerConnection();
+    stream.getTracks().forEach(t => call.pc.addTrack(t, stream));
+    call.timerId = setInterval(() => {
+      const el = $('call-timer');
+      if (el && call) el.textContent = fmtClock((Date.now() - call.startTs) / 1000);
+    }, 1000);
+    renderCallOverlay();
+    const local = $('call-local');
+    if (local) local.srcObject = stream;
+  }
+
+  async function handleSignal(data) {
+    const pc = call && call.pc;
+    if (!pc || !data) return;
+    try {
+      if (data.kind === 'sdp') {
+        const collision = data.sdp.type === 'offer' && (call.makingOffer || pc.signalingState !== 'stable');
+        if (!call.polite && collision) return; // impolite peer wins the glare
+        if (collision) await pc.setLocalDescription({ type: 'rollback' });
+        await pc.setRemoteDescription(data.sdp);
+        if (data.sdp.type === 'offer') {
+          await pc.setLocalDescription(await pc.createAnswer());
+          sendServer({ type: 'call:signal', to: call.peerId, data: { kind: 'sdp', sdp: pc.localDescription } });
+        }
+      } else if (data.kind === 'ice') {
+        await pc.addIceCandidate(data.candidate);
+      }
+    } catch (_) { /* stale signaling during teardown */ }
+  }
+
+  function toggleMute() {
+    if (!call || !call.localStream) return;
+    const t = call.localStream.getAudioTracks()[0];
+    if (t) t.enabled = !t.enabled;
+    renderCallOverlay();
+  }
+
+  // Video and screenshare toggles are implemented by the follow-up tasks;
+  // stubs keep the active-call overlay wiring valid until then.
+  function toggleVideo() { /* Task 4 */ }
+  function toggleScreen() { /* Task 5 */ }
+
+  function teardownCall(notify) {
+    if (!call) return;
+    ringStop();
+    clearInterval(call && call.timerId);
+    if (notify && call.peerId) sendServer({ type: 'call:end', to: call.peerId });
+    if (call.localStream) call.localStream.getTracks().forEach(t => t.stop());
+    if (call.screenStream) call.screenStream.getTracks().forEach(t => t.stop());
+    if (call.pc) { try { call.pc.close(); } catch (_) {} }
+    call = null;
+    renderCallOverlay();
+    if (C.view) render();
+  }
+
   function saveLast(obj) {
     try { localStorage.setItem('orgtree-chat-last', JSON.stringify(obj)); } catch (_) {}
   }
@@ -118,10 +296,11 @@
   }
 
   // green = clocked in, yellow = busy, red = scheduled now but not clocked in,
-  // grey ('off') = outside scheduled hours / no schedule.
+  // grey ('off') = outside scheduled hours / no schedule. Busy wins over clocked-in.
   function dotClass(pid) {
     const e = C.statuses.get(pid);
-    if (e && e.clockedIn) return e.status === 'busy' ? 'busy' : 'on';
+    if (e && e.status === 'busy') return 'busy';
+    if (e && e.clockedIn) return 'on';
     const p = personById(pid);
     if (p && window.OrgtreeAvailability && !OrgtreeAvailability.isEmpty(p.schedule)) {
       const st = OrgtreeAvailability.stateAt(p.schedule, p.timezone, new Date());
@@ -172,6 +351,7 @@
       if (C.ws !== ws) return;
       C.ws = null;
       resetVoice();
+      teardownCall(false);
       stopActivitySampler();
       const wasIn = ['list', 'convo', 'library', 'profile', 'search'].includes(C.view);
       C.view = 'setup';
@@ -184,6 +364,7 @@
 
   function disconnect(rerender = true) {
     resetVoice();
+    teardownCall(false);
     stopActivitySampler();
     clearInterval(tsRefreshTimer);
     tsRefreshTimer = null;
@@ -265,6 +446,8 @@
       else if (m.error === 'bad-pin') C.error = 'Wrong PIN.';
       else if (m.error === 'no-pin-set') C.error = 'Set a PIN in My profile first.';
       else if (m.error === 'file-too-large') C.error = 'That file is over the 300 MB share limit.';
+      else if (m.error === 'call-busy') { C.error = 'They are in another call.'; if (call && call.state === 'outgoing') teardownCall(false); }
+      else if (m.error === 'call-offline') { C.error = 'They are not connected right now.'; if (call && call.state === 'outgoing') teardownCall(false); }
       else C.error = m.error;
       if (clockMenuOpen() && (m.error === 'bad-pin' || m.error === 'no-pin-set')) {
         C.tcError = C.error;
@@ -296,6 +479,29 @@
         }
         if (['list', 'availability'].includes(C.view)) render();
       }
+      return;
+    }
+    if (m.type === 'call:invite') {
+      if (call) return; // server enforces busy too; this is belt-and-braces
+      call = { state: 'incoming', peerId: m.from, peerName: m.fromName };
+      ringStart();
+      renderCallOverlay();
+      return;
+    }
+    if (m.type === 'call:cancel' || m.type === 'call:end') {
+      if (call && call.peerId === m.from) { C.notice = 'Call ended.'; teardownCall(false); }
+      return;
+    }
+    if (m.type === 'call:accept') {
+      if (call && call.state === 'outgoing' && call.peerId === m.from) startCallMedia(true);
+      return;
+    }
+    if (m.type === 'call:decline') {
+      if (call && call.state === 'outgoing' && call.peerId === m.from) { C.notice = (call.peerName || 'They') + ' declined the call.'; teardownCall(false); }
+      return;
+    }
+    if (m.type === 'call:signal') {
+      if (call && call.peerId === m.from) handleSignal(m.data);
       return;
     }
     if (m.type === 'history') {
@@ -745,6 +951,7 @@
             <span class="chat-row-sub">${esc(AV.clockInTz(p.timezone, now, tf))} local${workingOn ? ' · working on: ' + esc(workingOn) : ''}</span>
           </span>
           ${pill(st)}
+          ${p.id !== C.you.id ? `<button class="chat-icon-btn avail-call" data-id="${esc(p.id)}" title="Call ${esc(p.name)}"><svg class="icon"><use href="#i-phone"/></svg></button>` : ''}
         </div>
         <div class="avail-track">${segs}<span class="avail-now" style="left:${(nowMin / 1440 * 100).toFixed(2)}%"></span></div>
       </div>`;
@@ -753,6 +960,7 @@
     panel.innerHTML = html;
     wireCommon();
     $('chat-back').addEventListener('click', () => { C.view = 'list'; render(); });
+    panel.querySelectorAll('.avail-call').forEach(b => b.addEventListener('click', () => startOutgoingCall(b.dataset.id)));
   }
 
   function openChannel(ch) {
@@ -807,6 +1015,7 @@
     if (!msgs.length) bodyHtml = `<div class="chat-hint">No messages yet in ${esc(channelLabel(ch))}. Say something.</div>`;
 
     const libBtn = isDm ? '' : `<button class="chat-icon-btn" id="chat-lib" title="Channel library (files & links)"><svg class="icon"><use href="#i-lib"/></svg></button>`;
+    const callBtn = isDm ? `<button class="chat-icon-btn" id="chat-call" title="Start a call"><svg class="icon"><use href="#i-phone"/></svg></button>` : '';
 
     let compose;
     if (voiceRec) {
@@ -835,12 +1044,14 @@
       </div>`;
     }
 
-    panel.innerHTML = header((isDm ? '' : '#') + channelLabel(ch), { back: true, sub: subBits.join(' · '), buttons: libBtn }) + `
+    panel.innerHTML = header((isDm ? '' : '#') + channelLabel(ch), { back: true, sub: subBits.join(' · '), buttons: libBtn + callBtn }) + `
       <div class="chat-body chat-msgs" id="chat-msgs">${errLine()}${bodyHtml}</div>
       ${compose}`;
     wireCommon();
     $('chat-back').addEventListener('click', () => { resetVoice(); C.view = 'list'; C.current = null; render(); });
     if (!isDm) $('chat-lib').addEventListener('click', () => { resetVoice(); C.backView = 'convo'; C.view = 'library'; render(); });
+    const callb = $('chat-call');
+    if (callb) callb.addEventListener('click', () => startOutgoingCall(otherId));
     const input = $('chat-input');
     if (input) {
       const send = () => {
