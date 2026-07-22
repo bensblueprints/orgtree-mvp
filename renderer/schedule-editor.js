@@ -60,7 +60,7 @@ window.ScheduleEditor = (() => {
     const s = (+m[1]) * 60 + (+(m[2] || 0));
     let e = (+m[3]) * 60 + (+(m[4] || 0));
     if (e <= s) e += 12 * 60; // "9-5" means 9:00–17:00
-    if (e <= s || e > 1440) return norm;
+    if (e <= s || e >= 1440) return norm;
     for (const d of ['mon', 'tue', 'wed', 'thu', 'fri']) norm[d] = [[hhmm(s), hhmm(e)]];
     return norm;
   }

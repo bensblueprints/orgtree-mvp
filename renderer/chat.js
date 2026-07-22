@@ -559,7 +559,9 @@
       const me = C.statuses.get(C.you.id) || {};
       return `<div class="chat-clock on">
         <svg class="icon"><use href="#i-timer"/></svg>
-        <span><b>Clocked in${me.status === 'busy' ? ' — busy' : ''}.</b>${me.statusText ? ' Working on: ' + esc(me.statusText) : ''}</span>
+        <span><b>Clocked in${me.status === 'busy' ? ' — busy' : ''}.</b></span>
+        <input type="text" id="chat-status-edit" placeholder="Working on… (optional)" maxlength="140" style="flex:1" value="${esc(me.statusText || '')}">
+        <button class="btn small ghost" id="chat-status-save">Save</button>
         <button class="btn small ghost" id="chat-busy">${me.status === 'busy' ? 'Mark available' : 'Mark busy'}</button>
         <button class="btn small ghost" id="chat-clock-out">Clock out</button>
       </div>`;
@@ -674,6 +676,10 @@
       const st = $('chat-status-text');
       sendServer({ type: 'clockIn', pin: $('chat-pin').value, statusText: st ? st.value.trim() : '' });
     });
+    const stSave = $('chat-status-save');
+    if (stSave) stSave.addEventListener('click', () => {
+      sendServer({ type: 'status', statusText: $('chat-status-edit').value.trim() });
+    });
     const busy = $('chat-busy');
     if (busy) busy.addEventListener('click', () => {
       const me = C.statuses.get(C.you.id) || {};
@@ -755,7 +761,7 @@
       const mine = m.from === C.you.id;
       const grouped = m.from === lastFrom && m.ts - lastTs < 5 * 60 * 1000 && m.kind !== 'file';
       lastFrom = m.from; lastTs = m.ts;
-      const time = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const time = OrgtreeAvailability.clockInTz(undefined, new Date(m.ts), (C.you && C.you.timeFormat) || '12h');
       let bubble;
       if (m.kind === 'file') {
         bubble = `<div class="chat-bubble file">
