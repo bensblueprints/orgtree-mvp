@@ -192,6 +192,8 @@
       teardownCall(false);
       return;
     }
+    // Teardown may have landed while the permission prompt was pending.
+    if (!call) { stream.getTracks().forEach(t => t.stop()); return; }
     ringStop();
     call.state = 'active';
     call.polite = !isCaller; // callee rolls back on offer collision
@@ -252,6 +254,7 @@
     } else {
       try {
         const vs = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (!call || !call.localStream) { vs.getTracks().forEach(t => t.stop()); return; }
         const track = vs.getVideoTracks()[0];
         call.localStream.addTrack(track);
         call.videoSender = call.pc.addTrack(track, call.localStream);
@@ -272,6 +275,7 @@
     try { sources = await window.orgtree.chatGetSources(); } catch (_) { sources = []; }
     if (!sources.length) { C.notice = 'No screens or windows to share (check Screen Recording permission).'; render(); return; }
     const pick = await pickSource(sources);
+    if (!call) return;
     if (!pick) return;
     let ss = null;
     try {
@@ -305,7 +309,7 @@
     if (call.screenStream) { call.screenStream.getTracks().forEach(t => t.stop()); call.screenStream = null; }
     if (call.videoSender && call.screenSender === call.videoSender) {
       const camTrack = call.localStream.getVideoTracks()[0] || null;
-      call.videoSender.replaceTrack(camTrack); // back to camera (or black if camera off)
+      call.videoSender.replaceTrack(camTrack).catch(() => {}); // back to camera (or black if camera off)
       call.screenSender = null;
     } else {
       call.pc.removeTrack(call.screenSender);
