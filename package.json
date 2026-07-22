@@ -50,6 +50,9 @@
     },
     "mac": {
       "category": "public.app-category.business",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "WholeTeam uses your microphone only when you record a voice note for your team chat."
+      },
       "icon": "build/icon.png",
       "target": [
         {
@@ -63,6 +66,7 @@
     }
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "nodemailer": "^9.0.3",
     "ws": "^8.21.1",
     "xlsx": "^0.18.5"
