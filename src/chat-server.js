@@ -26,6 +26,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
+const availability = require('./availability');
 
 const HISTORY_CAP = 500;              // messages per channel
 const TEXT_CAP = 4000;                // chars per message
@@ -197,9 +198,26 @@ function createChatServer({
       .map(p => ({
         id: p.id, name: p.name, title: p.title || '', department: p.department || '',
         timezone: p.timezone || '', workHours: p.workHours || '',
+        schedule: availability.normalizeSchedule(p.schedule),
+        timeFormat: p.timeFormat === '24h' ? '24h' : '12h',
       }));
   }
   let minimalRoster = buildMinimalRoster(roster);
+
+  // Ephemeral presence: never written to the chart file. The working-on line
+  // dies with the clock session; busy resets on clock-out.
+  const statuses = new Map(); // personId -> { status: 'busy'|undefined, statusText: string }
+  function statusEntry(personId) {
+    const s = statuses.get(personId) || {};
+    return {
+      personId,
+      clockedIn: !!openSession(personId),
+      status: s.status === 'busy' ? 'busy' : 'available',
+      statusText: s.statusText || '',
+    };
+  }
+  const statusList = () => minimalRoster.map(p => statusEntry(p.id));
+  const pushStatus = (personId) => broadcast({ type: 'statusChanged', entry: statusEntry(personId) });
   let departments = [...new Set(minimalRoster.map(p => p.department).filter(Boolean))].sort();
   let channels = [
     { id: 'org', label: 'Everyone' },
@@ -253,7 +271,7 @@ function createChatServer({
     ws._orgtreeAdmin = isAdmin;
 
     // First contact: hand over the roster so the joiner can pick who they are.
-    send(ws, { type: 'roster', roster: minimalRoster, channels, taken: online(), retentionDays });
+    send(ws, { type: 'roster', roster: minimalRoster, channels, taken: online(), retentionDays, statuses: statusList() });
 
     ws.on('message', (raw) => {
       let m;
@@ -277,6 +295,7 @@ function createChatServer({
           admin: ws._orgtreeAdmin,
           pinSet: !!pinHashes.get(person.id),
           clockedIn: !!openSession(person.id),
+          statuses: statusList(),
         });
         broadcast({ type: 'presence', online: online() });
         return;
@@ -339,6 +358,12 @@ function createChatServer({
         for (const k of PROFILE_FIELDS) {
           if (m.fields && typeof m.fields[k] === 'string') fields[k] = m.fields[k].slice(0, 300);
         }
+        if (m.fields && m.fields.schedule != null) {
+          fields.schedule = availability.normalizeSchedule(m.fields.schedule);
+        }
+        if (m.fields && (m.fields.timeFormat === '12h' || m.fields.timeFormat === '24h')) {
+          fields.timeFormat = m.fields.timeFormat;
+        }
         if (m.pin && /^\d{4,8}$/.test(String(m.pin))) {
           const h = hashPin(m.pin);
           pinHashes.set(info.personId, h);
@@ -349,6 +374,8 @@ function createChatServer({
         if (rp) {
           if (fields.timezone != null) rp.timezone = fields.timezone;
           if (fields.workHours != null) rp.workHours = fields.workHours;
+          if (fields.schedule != null) rp.schedule = fields.schedule;
+          if (fields.timeFormat != null) rp.timeFormat = fields.timeFormat;
         }
         if (typeof onProfileUpdate === 'function') {
           try { onProfileUpdate(info.personId, fields); } catch (_) { /* host-side */ }
@@ -371,13 +398,31 @@ function createChatServer({
           });
           persistTimesheet();
         }
+        if (typeof m.statusText === 'string') {
+          const s = statuses.get(info.personId) || {};
+          s.statusText = m.statusText.trim().slice(0, 140);
+          statuses.set(info.personId, s);
+        }
         send(ws, { type: 'clock', status: 'in', summary: summarize(info.personId) });
+        pushStatus(info.personId);
         return;
       }
 
       if (m.type === 'clockOut') {
         closeSession(info.personId);
+        statuses.delete(info.personId); // working-on line and busy die with the session
         send(ws, { type: 'clock', status: 'out', summary: summarize(info.personId) });
+        pushStatus(info.personId);
+        return;
+      }
+
+      if (m.type === 'status') {
+        if (!openSession(info.personId)) return; // busy/working-on need an active clock session
+        const s = statuses.get(info.personId) || {};
+        if (m.status === 'busy' || m.status === 'available') s.status = m.status === 'busy' ? 'busy' : undefined;
+        if (typeof m.statusText === 'string') s.statusText = m.statusText.trim().slice(0, 140);
+        statuses.set(info.personId, s);
+        pushStatus(info.personId);
         return;
       }
 
@@ -495,10 +540,13 @@ function createChatServer({
               try { ws.close(); } catch (_) { /* gone */ }
             }
           }
+          for (const pid of [...statuses.keys()]) {
+            if (!validIds.has(pid)) statuses.delete(pid);
+          }
           // Push the fresh roster to every socket — including joiners still on
           // the "Who are you?" screen, who have no identity in `conns` yet.
           for (const ws of wss.clients) {
-            send(ws, { type: 'rosterSync', roster: minimalRoster, channels, taken: online(), retentionDays });
+            send(ws, { type: 'rosterSync', roster: minimalRoster, channels, taken: online(), retentionDays, statuses: statusList() });
           }
           for (const [ws, info] of conns) {
             if (info.admin && validIds.has(info.personId)) {

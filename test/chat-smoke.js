@@ -339,6 +339,59 @@ const roster = [
     await s6.stop();
   }
 
+  console.log('\n— presence status: clock-in line, busy toggle, roster fields —');
+  {
+    const withSched = roster.map(p => p.id === 'vic'
+      ? { ...p, schedule: { mon: [['09:00', '12:00'], ['13:00', '17:00']] }, timeFormat: '24h' }
+      : p);
+    const s10 = await createChatServer({ port: PORT, roster: withSched });
+    const w1 = await client(PORT); await sleep(80);
+    w1.send({ type: 'hello', personId: 'ada' }); await sleep(120);
+    const w2 = await client(PORT); await sleep(80);
+    w2.send({ type: 'hello', personId: 'vic' }); await sleep(120);
+
+    const rMsg = w1.inbox.find(m => m.type === 'roster');
+    const vicRow = rMsg.roster.find(p => p.id === 'vic');
+    eq(vicRow.schedule, { mon: [['09:00', '12:00'], ['13:00', '17:00']] }, 'roster carries schedule');
+    eq(vicRow.timeFormat, '24h', 'roster carries timeFormat');
+    ok(Array.isArray(rMsg.statuses), 'roster carries a statuses list');
+
+    w2.send({ type: 'status', status: 'busy' });
+    await sleep(120);
+    ok(!w1.inbox.some(m => m.type === 'statusChanged' && m.entry && m.entry.status === 'busy'),
+      'busy ignored while not clocked in');
+
+    w2.send({ type: 'clockIn', pin: '4821', statusText: 'Q3 budget review' });
+    await sleep(150);
+    const inChg = w1.inbox.filter(m => m.type === 'statusChanged').pop();
+    eq(inChg.entry.personId, 'vic', 'statusChanged identifies the person');
+    eq(inChg.entry.clockedIn, true, 'clock-in broadcast to everyone');
+    eq(inChg.entry.statusText, 'Q3 budget review', 'working-on line broadcast');
+
+    w2.send({ type: 'status', status: 'busy' });
+    await sleep(120);
+    eq(w1.inbox.filter(m => m.type === 'statusChanged').pop().entry.status, 'busy', 'busy while clocked in');
+
+    w2.send({ type: 'status', statusText: 'budget review v2' });
+    await sleep(120);
+    eq(w1.inbox.filter(m => m.type === 'statusChanged').pop().entry.statusText, 'budget review v2', 'working-on line editable');
+
+    w2.send({ type: 'clockOut' });
+    await sleep(150);
+    const outChg = w1.inbox.filter(m => m.type === 'statusChanged').pop();
+    eq(outChg.entry.clockedIn, false, 'clock-out broadcast');
+    eq(outChg.entry.statusText, '', 'clock-out clears the working-on line');
+    eq(outChg.entry.status, 'available', 'clock-out resets busy');
+
+    w2.send({ type: 'profile', fields: { schedule: { fri: [['10:00', '16:00']] }, timeFormat: '12h' } });
+    await sleep(150);
+    const rUpd = w1.inbox.filter(m => m.type === 'rosterUpdate').pop();
+    eq(rUpd.fields.schedule, { fri: [['10:00', '16:00']] }, 'profile schedule update broadcast');
+    eq(rUpd.fields.timeFormat, '12h', 'profile timeFormat update broadcast');
+
+    await s10.stop();
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`\nChat server all good — ${passed} assertions passed.\n`);
   process.exit(0);
