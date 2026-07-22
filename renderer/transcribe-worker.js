@@ -13,7 +13,7 @@ env.allowLocalModels = false;
 env.useBrowserCache = true;
 // Load the ONNX WASM runtime from the locally bundled files instead of the
 // default cdn.jsdelivr.net URL, which is blocked by the app's CSP.
-env.backends.onnx.wasm.wasmPaths = '../node_modules/onnxruntime-web/dist/';
+env.backends.onnx.wasm.wasmPaths = new URL('../node_modules/onnxruntime-web/dist/', import.meta.url).href;
 
 let transcriber = null;
 let loading = false;
