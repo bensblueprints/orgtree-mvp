@@ -43,7 +43,7 @@
 - Produces (wire protocol consumed by Task 3):
   - Client→server `{ type: 'call:invite'|'call:accept'|'call:decline'|'call:end'|'call:signal', to, data? }`
   - Server→client relays `{ type: 'call:invite'|'call:accept'|'call:decline'|'call:end'|'call:cancel'|'call:signal', from, fromName?, data? }`
-  - Errors: `call-busy`, `call-offline`, `call-unknown`.
+  - Errors: `call-busy`, `call-offline` (non-roster targets also return `call-offline` — verified in Task 1 review; `call-unknown` was dropped).
 
 - [ ] **Step 1: Write the failing test**
 
