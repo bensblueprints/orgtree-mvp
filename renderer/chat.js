@@ -238,6 +238,13 @@
   async function toggleVideo() {
     if (!call || !call.pc) return;
     if (call.videoSender) {
+      if (call.screenSender) {
+        // Screen share is flowing through the camera sender; stopping it as
+        // if it were the camera would corrupt state. Ask user to stop sharing first.
+        C.notice = 'Stop sharing before turning video off.';
+        render();
+        return;
+      }
       const track = call.videoSender.track;
       call.pc.removeTrack(call.videoSender);
       if (track) track.stop();
@@ -266,21 +273,27 @@
     if (!sources.length) { C.notice = 'No screens or windows to share (check Screen Recording permission).'; render(); return; }
     const pick = await pickSource(sources);
     if (!pick) return;
+    let ss = null;
     try {
-      const ss = await navigator.mediaDevices.getUserMedia({
+      ss = await navigator.mediaDevices.getUserMedia({
         video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: pick.id, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 15 } },
         audio: false,
       });
-      call.screenStream = ss;
       const track = ss.getVideoTracks()[0];
       track.onended = () => { if (call && call.screenSender) { stopScreenShare(); renderCallOverlay(); } };
       if (call.videoSender) {
-        call.screenSender = call.videoSender;
         await call.videoSender.replaceTrack(track);
+        call.screenSender = call.videoSender;
       } else {
-        call.screenSender = call.pc.addTrack(track, ss);
+        // Attach to localStream so the remote's ontrack keeps the audio-bearing stream.
+        call.screenSender = call.pc.addTrack(track, call.localStream);
       }
+      // Only record the stream after the track is actually on the wire, so a
+      // failed replaceTrack/addTrack doesn't leak the capture.
+      call.screenStream = ss;
     } catch (_) {
+      // Clean up the capture if the track never made it onto the wire.
+      if (ss) ss.getTracks().forEach(t => t.stop());
       C.notice = 'Screen sharing failed — check Screen Recording permission.';
       render();
     }
