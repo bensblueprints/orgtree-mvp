@@ -37,9 +37,37 @@ jobs:
       - name: Build Admin installer
         # --publish never: electron-builder must not self-publish on tag builds
         # (needs GH_TOKEN); the action-gh-release step below attaches installers.
-        run: npm run dist -- --publish never
+        # Signs via Azure Trusted Signing when the AZURE_* secrets are set;
+        # otherwise builds unsigned (SmartScreen warns once on first run).
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
+        run: |
+          if ($env:AZURE_CLIENT_ID -and $env:AZURE_SIGN_ENDPOINT) {
+            npm run dist -- --publish never -c.win.azureSignOptions.endpoint="$env:AZURE_SIGN_ENDPOINT" -c.win.azureSignOptions.codeSigningAccountName="$env:AZURE_SIGN_ACCOUNT" -c.win.azureSignOptions.certificateProfileName="$env:AZURE_SIGN_PROFILE"
+          } else {
+            npm run dist -- --publish never
+          }
       - name: Build Member installer
-        run: npm run dist:member -- --publish never
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
+        run: |
+          if ($env:AZURE_CLIENT_ID -and $env:AZURE_SIGN_ENDPOINT) {
+            npm run dist:member -- --publish never -c.win.azureSignOptions.endpoint="$env:AZURE_SIGN_ENDPOINT" -c.win.azureSignOptions.codeSigningAccountName="$env:AZURE_SIGN_ACCOUNT" -c.win.azureSignOptions.certificateProfileName="$env:AZURE_SIGN_PROFILE"
+          } else {
+            npm run dist:member -- --publish never
+          }
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
