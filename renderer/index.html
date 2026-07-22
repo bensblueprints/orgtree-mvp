@@ -275,8 +275,8 @@
         <label>Time zone
           <select id="f-timezone"><option value="">— Not set —</option></select>
         </label>
-        <label>Working hours
-          <input type="text" id="f-workhours" placeholder="9:00–17:00" maxlength="40">
+        <label class="span2">Working hours <span class="hint">(blocks per day — a gap between blocks is a break; empty day = day off)</span>
+          <div id="f-schedule"></div>
         </label>
         <label>Salary <span class="hint">(number, used for cost rollups)</span>
           <input type="number" id="f-salary" placeholder="85000" min="0" step="1000">
@@ -428,7 +428,9 @@
 
   <script src="../src/tree.js"></script>
   <script src="../src/csv.js"></script>
+  <script src="../src/availability.js"></script>
   <script src="layout.js"></script>
+  <script src="schedule-editor.js"></script>
   <script src="app.js"></script>
   <script src="chat.js"></script>
 </body>

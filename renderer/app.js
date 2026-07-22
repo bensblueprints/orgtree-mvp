@@ -1,6 +1,6 @@
 'use strict';
 
-/* global OrgtreeTree, OrgtreeCSV, OrgtreeLayout */
+/* global OrgtreeTree, OrgtreeCSV, OrgtreeLayout, OrgtreeAvailability, ScheduleEditor */
 
 // ---------- state ----------
 
@@ -946,7 +946,7 @@ function syncDrawer() {
   html += row('i-pin', 'Location', escapeHtml(p.location));
   html += row('i-file', 'Start date', escapeHtml(p.startDate));
   html += row('i-timer', 'Time zone', escapeHtml(p.timezone));
-  html += row('i-timer', 'Working hours', escapeHtml(p.workHours));
+  html += row('i-timer', 'Working hours', escapeHtml(ScheduleEditor.summary(p.schedule, '12h') || p.workHours));
   if (p.salary != null) html += row('i-dollar', 'Salary', escapeHtml('$' + p.salary.toLocaleString()));
   html += row('i-file', 'Notes', escapeHtml(p.notes));
   for (const [k, v] of Object.entries(p.custom || {})) {
@@ -1320,7 +1320,7 @@ function openEditor(id) {
   }
   tzSel.value = p ? (p.timezone || '') : '';
   if (tzSel.selectedIndex === -1) tzSel.value = '';
-  $('f-workhours').value = p ? (p.workHours || '') : '';
+  ScheduleEditor.mount($('f-schedule'), p ? p.schedule : null, { timeFormat: '24h', prefillFrom: p ? p.workHours : '' });
   $('f-salary').value = p && p.salary != null ? p.salary : '';
   $('f-notes').value = p ? p.notes : '';
   $('f-custom').value = p ? customToText(p.custom) : '';
@@ -1390,7 +1390,8 @@ async function savePerson() {
     dottedManagerId: dottedManagerId === id ? null : dottedManagerId,
     photo: pickedPhoto,
     timezone: $('f-timezone').value.trim(),
-    workHours: $('f-workhours').value.trim(),
+    workHours: prev ? (prev.workHours || '') : '',
+    schedule: ScheduleEditor.read($('f-schedule')),
     pinHash: prev ? (prev.pinHash || '') : '',
   };
 
