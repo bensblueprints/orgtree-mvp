@@ -54,7 +54,8 @@
     "mac": {
       "category": "public.app-category.business",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "WholeTeam uses your microphone only when you record a voice note for your team chat."
+        "NSMicrophoneUsageDescription": "WholeTeam uses your microphone only when you record a voice note for your team chat.",
+        "NSCameraUsageDescription": "WholeTeam uses your camera only when you turn on video in a call."
       },
       "icon": "build/icon.png",
       "target": [
