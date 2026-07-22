@@ -389,6 +389,14 @@ const roster = [
     eq(rUpd.fields.schedule, { fri: [['10:00', '16:00']] }, 'profile schedule update broadcast');
     eq(rUpd.fields.timeFormat, '12h', 'profile timeFormat update broadcast');
 
+    w2.send({ type: 'clockIn', pin: '4821', statusText: 'about to vanish' });
+    await sleep(150);
+    w2.ws.close(); // hard disconnect = automatic clock-out
+    await sleep(250);
+    const dcChg = w1.inbox.filter(m => m.type === 'statusChanged').pop();
+    eq(dcChg.entry.clockedIn, false, 'hard disconnect broadcasts the clock-out');
+    eq(dcChg.entry.statusText, '', 'hard disconnect clears the working-on line');
+
     await s10.stop();
   }
 

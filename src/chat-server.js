@@ -507,7 +507,11 @@ function createChatServer({
 
     ws.on('close', () => {
       const info = conns.get(ws);
-      if (info) closeSession(info.personId); // disconnect = automatic clock-out
+      if (info) {
+        closeSession(info.personId); // disconnect = automatic clock-out
+        statuses.delete(info.personId); // working-on line and busy die with the session
+        pushStatus(info.personId);
+      }
       if (conns.delete(ws)) broadcast({ type: 'presence', online: online() });
     });
   });
