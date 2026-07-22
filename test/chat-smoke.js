@@ -475,6 +475,66 @@ const roster = [
     fs.rmSync(dir4, { recursive: true, force: true });
   }
 
+  console.log('\n— 1:1 calls: invite, busy, accept, signal, end, disconnect —');
+  {
+    const s15 = await createChatServer({ port: PORT, roster });
+    const a = await client(PORT); await sleep(80);
+    a.send({ type: 'hello', personId: 'ada' }); await sleep(120);
+    const b = await client(PORT); await sleep(80);
+    b.send({ type: 'hello', personId: 'vic' }); await sleep(120);
+    const c = await client(PORT); await sleep(80);
+    c.send({ type: 'hello', personId: 'sam' }); await sleep(120);
+
+    a.send({ type: 'call:invite', to: 'vic' });
+    await sleep(150);
+    ok(b.inbox.some(m => m.type === 'call:invite' && m.from === 'ada'), 'invite relayed to the target');
+    ok(!c.inbox.some(m => m.type && String(m.type).startsWith('call:')), 'invite not leaked to a third person');
+
+    c.send({ type: 'call:invite', to: 'ada' });
+    await sleep(120);
+    // ada has a pending outgoing invite but is not IN a call yet — second invite still allowed? No:
+    // she is engaged (pending). Spec: one call per person incl. pending → busy.
+    ok(c.inbox.some(m => m.type === 'error' && m.error === 'call-busy'), 'pending engagement counts as busy');
+
+    b.send({ type: 'call:accept', to: 'ada' });
+    await sleep(150);
+    ok(a.inbox.some(m => m.type === 'call:accept' && m.from === 'vic'), 'accept relayed to the caller');
+    const busyAda = c.inbox.concat(a.inbox).filter(m => m.type === 'statusChanged' && m.entry && m.entry.personId === 'ada').pop();
+    eq(busyAda.entry.status, 'busy', 'accept auto-marks the caller busy');
+    const busyVic = a.inbox.filter(m => m.type === 'statusChanged' && m.entry && m.entry.personId === 'vic').pop();
+    eq(busyVic.entry.status, 'busy', 'accept auto-marks the callee busy');
+
+    c.send({ type: 'call:invite', to: 'vic' });
+    await sleep(120);
+    ok(c.inbox.some(m => m.type === 'error' && m.error === 'call-busy'), 'active call = busy for new invites');
+
+    a.send({ type: 'call:signal', to: 'vic', data: { kind: 'sdp', sdp: 'offer-blob' } });
+    await sleep(120);
+    ok(b.inbox.some(m => m.type === 'call:signal' && m.from === 'ada' && m.data.sdp === 'offer-blob'), 'signal relayed between the pair');
+    c.send({ type: 'call:signal', to: 'vic', data: { kind: 'sdp', sdp: 'evil' } });
+    await sleep(120);
+    ok(!b.inbox.some(m => m.type === 'call:signal' && m.from === 'sam'), 'outsider signal not relayed');
+
+    a.send({ type: 'call:end', to: 'vic' });
+    await sleep(150);
+    ok(b.inbox.some(m => m.type === 'call:end' && m.from === 'ada'), 'end relayed to the peer');
+    const freeAda = a.inbox.filter(m => m.type === 'statusChanged' && m.entry && m.entry.personId === 'ada').pop();
+    eq(freeAda.entry.status, 'available', 'call end restores available');
+
+    // disconnect mid-call ends it for the peer
+    a.send({ type: 'call:invite', to: 'vic' }); await sleep(120);
+    b.send({ type: 'call:accept', to: 'ada' }); await sleep(120);
+    a.ws.close(); await sleep(250);
+    ok(b.inbox.some(m => m.type === 'call:end' && m.from === 'ada'), 'disconnect mid-call ends it for the peer');
+
+    // invite to offline person
+    b.send({ type: 'call:invite', to: 'nobody' });
+    await sleep(120);
+    ok(b.inbox.some(m => m.type === 'error' && m.error === 'call-offline'), 'offline target rejected');
+
+    await s15.stop();
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`\nChat server all good — ${passed} assertions passed.\n`);
   process.exit(0);

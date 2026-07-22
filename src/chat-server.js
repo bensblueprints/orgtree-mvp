@@ -222,6 +222,45 @@ function createChatServer({
   }
   const statusList = () => minimalRoster.map(p => statusEntry(p.id));
   const pushStatus = (personId) => broadcast({ type: 'statusChanged', entry: statusEntry(personId) });
+
+  // ----- 1:1 calls (signaling relay only — media is peer-to-peer) -----
+  const pendingCalls = new Map(); // callerId -> calleeId
+  const activeCalls = new Map();  // personId -> peerId (both directions)
+  function sendToPerson(pid, obj) {
+    for (const [sock, inf] of conns) if (inf.personId === pid) { send(sock, obj); return true; }
+    return false;
+  }
+  function engaged(pid) { return activeCalls.has(pid) || pendingCalls.has(pid) || [...pendingCalls.values()].includes(pid); }
+  function setBusy(pid, busy) {
+    const s = statuses.get(pid) || {};
+    s.status = busy ? 'busy' : undefined;
+    statuses.set(pid, s);
+    pushStatus(pid);
+  }
+  function clearEngagement(pid, notifyType) {
+    // Pending invite where pid is the caller
+    const callee = pendingCalls.get(pid);
+    if (callee) {
+      pendingCalls.delete(pid);
+      if (notifyType) sendToPerson(callee, { type: notifyType, from: pid });
+    }
+    // Pending invite where pid is the callee
+    for (const [caller, c2] of [...pendingCalls]) {
+      if (c2 === pid) {
+        pendingCalls.delete(caller);
+        if (notifyType) sendToPerson(caller, { type: notifyType, from: pid });
+      }
+    }
+    // Active call
+    const peer = activeCalls.get(pid);
+    if (peer != null) {
+      activeCalls.delete(pid);
+      activeCalls.delete(peer);
+      if (notifyType) sendToPerson(peer, { type: notifyType, from: pid });
+      setBusy(pid, false);
+      setBusy(peer, false);
+    }
+  }
   let departments = [...new Set(minimalRoster.map(p => p.department).filter(Boolean))].sort();
   let channels = [
     { id: 'org', label: 'Everyone' },
@@ -458,6 +497,54 @@ function createChatServer({
         return;
       }
 
+      if (m.type === 'call:invite') {
+        const to = String(m.to || '');
+        if (!to || to === info.personId) return;
+        if (!minimalRoster.some(p => p.id === to)) { send(ws, { type: 'error', error: 'call-offline' }); return; }
+        if (engaged(info.personId) || engaged(to)) { send(ws, { type: 'error', error: 'call-busy' }); return; }
+        if (!sendToPerson(to, { type: 'call:invite', from: info.personId, fromName: info.name })) {
+          send(ws, { type: 'error', error: 'call-offline' });
+          return;
+        }
+        pendingCalls.set(info.personId, to);
+        return;
+      }
+
+      if (m.type === 'call:accept') {
+        const caller = String(m.to || '');
+        if (pendingCalls.get(caller) !== info.personId) return;
+        pendingCalls.delete(caller);
+        activeCalls.set(caller, info.personId);
+        activeCalls.set(info.personId, caller);
+        sendToPerson(caller, { type: 'call:accept', from: info.personId });
+        setBusy(caller, true);
+        setBusy(info.personId, true);
+        return;
+      }
+
+      if (m.type === 'call:decline') {
+        const caller = String(m.to || '');
+        if (pendingCalls.get(caller) !== info.personId) return;
+        pendingCalls.delete(caller);
+        sendToPerson(caller, { type: 'call:decline', from: info.personId });
+        return;
+      }
+
+      if (m.type === 'call:end') {
+        const peer = String(m.to || '');
+        if (activeCalls.get(info.personId) === peer || pendingCalls.get(info.personId) === peer) {
+          clearEngagement(info.personId, 'call:end');
+        }
+        return;
+      }
+
+      if (m.type === 'call:signal') {
+        const to = String(m.to || '');
+        if (activeCalls.get(info.personId) !== to) return; // only paired parties
+        sendToPerson(to, { type: 'call:signal', from: info.personId, data: m.data });
+        return;
+      }
+
       if (m.type === 'activity') {
         // Idle-derived activity sample from a clocked-in client. Counts only —
         // no keystrokes or content are ever transmitted.
@@ -556,6 +643,7 @@ function createChatServer({
         closeSession(info.personId); // disconnect = automatic clock-out
         statuses.delete(info.personId); // working-on line and busy die with the session
         pushStatus(info.personId);
+        clearEngagement(info.personId, 'call:end');
       }
       if (conns.delete(ws)) broadcast({ type: 'presence', online: online() });
     });
