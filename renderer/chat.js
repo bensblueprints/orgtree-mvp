@@ -118,7 +118,7 @@
       </div>`;
       $('call-cancel').addEventListener('click', () => { sendServer({ type: 'call:end', to: call.peerId }); teardownCall(false); });
     } else {
-      const muted = call.localStream && !call.localStream.getAudioTracks()[0].enabled;
+      const muted = call.localStream && !call.localStream.getAudioTracks()[0]?.enabled;
       el.innerHTML = `<div class="call-card active">
         <div class="call-head"><b>${name}</b><span id="call-timer">${call.startTs ? fmtClock((Date.now() - call.startTs) / 1000) : '0:00'}</span></div>
         <div class="call-videos">
@@ -136,6 +136,11 @@
       $('call-video').addEventListener('click', toggleVideo);
       $('call-screen').addEventListener('click', toggleScreen);
       $('call-hangup').addEventListener('click', () => { sendServer({ type: 'call:end', to: call.peerId }); teardownCall(false); });
+      // innerHTML above destroyed the <video> elements; reattach live streams.
+      const remoteEl = $('call-remote');
+      if (remoteEl && call.remoteStream) remoteEl.srcObject = call.remoteStream;
+      const localEl = $('call-local');
+      if (localEl && call.localStream) localEl.srcObject = call.localStream;
     }
   }
 
@@ -159,6 +164,7 @@
       if (e.candidate) sendServer({ type: 'call:signal', to: call.peerId, data: { kind: 'ice', candidate: e.candidate } });
     };
     pc.ontrack = (e) => {
+      if (e.streams[0]) call.remoteStream = e.streams[0];
       const remote = $('call-remote');
       if (remote && e.streams[0]) remote.srcObject = e.streams[0];
     };
@@ -229,10 +235,89 @@
     renderCallOverlay();
   }
 
-  // Video and screenshare toggles are implemented by the follow-up tasks;
-  // stubs keep the active-call overlay wiring valid until then.
-  function toggleVideo() { /* Task 4 */ }
-  function toggleScreen() { /* Task 5 */ }
+  async function toggleVideo() {
+    if (!call || !call.pc) return;
+    if (call.videoSender) {
+      const track = call.videoSender.track;
+      call.pc.removeTrack(call.videoSender);
+      if (track) track.stop();
+      call.videoSender = null;
+    } else {
+      try {
+        const vs = await navigator.mediaDevices.getUserMedia({ video: true });
+        const track = vs.getVideoTracks()[0];
+        call.localStream.addTrack(track);
+        call.videoSender = call.pc.addTrack(track, call.localStream);
+        const local = $('call-local');
+        if (local) local.srcObject = call.localStream;
+      } catch (_) {
+        C.notice = 'Camera unavailable — check macOS camera permission.';
+        render();
+      }
+    }
+    renderCallOverlay();
+  }
+
+  async function toggleScreen() {
+    if (!call || !call.pc) return;
+    if (call.screenSender) { stopScreenShare(); renderCallOverlay(); return; }
+    let sources;
+    try { sources = await window.orgtree.chatGetSources(); } catch (_) { sources = []; }
+    if (!sources.length) { C.notice = 'No screens or windows to share (check Screen Recording permission).'; render(); return; }
+    const pick = await pickSource(sources);
+    if (!pick) return;
+    try {
+      const ss = await navigator.mediaDevices.getUserMedia({
+        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: pick.id, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 15 } },
+        audio: false,
+      });
+      call.screenStream = ss;
+      const track = ss.getVideoTracks()[0];
+      track.onended = () => { if (call && call.screenSender) { stopScreenShare(); renderCallOverlay(); } };
+      if (call.videoSender) {
+        call.screenSender = call.videoSender;
+        await call.videoSender.replaceTrack(track);
+      } else {
+        call.screenSender = call.pc.addTrack(track, ss);
+      }
+    } catch (_) {
+      C.notice = 'Screen sharing failed — check Screen Recording permission.';
+      render();
+    }
+    renderCallOverlay();
+  }
+
+  function stopScreenShare() {
+    if (!call || !call.screenSender) return;
+    if (call.screenStream) { call.screenStream.getTracks().forEach(t => t.stop()); call.screenStream = null; }
+    if (call.videoSender && call.screenSender === call.videoSender) {
+      const camTrack = call.localStream.getVideoTracks()[0] || null;
+      call.videoSender.replaceTrack(camTrack); // back to camera (or black if camera off)
+      call.screenSender = null;
+    } else {
+      call.pc.removeTrack(call.screenSender);
+      call.screenSender = null;
+    }
+  }
+
+  function pickSource(sources) {
+    return new Promise((resolve) => {
+      const el = overlay();
+      el.classList.remove('hidden');
+      el.innerHTML = `<div class="call-card source-picker">
+        <b>Share what?</b>
+        <div class="source-grid">
+          ${sources.map(s => `<button class="source-item" data-id="${esc(s.id)}">
+            ${s.thumbnailDataUrl ? `<img src="${esc(s.thumbnailDataUrl)}" alt="">` : ''}
+            <span>${esc(s.name)}</span><em>${s.kind}</em>
+          </button>`).join('')}
+        </div>
+        <button class="btn ghost small" id="source-cancel" style="width:100%">Cancel</button>
+      </div>`;
+      el.querySelectorAll('.source-item').forEach(b => b.addEventListener('click', () => { renderCallOverlay(); resolve(sources.find(s => s.id === b.dataset.id)); }));
+      $('source-cancel').addEventListener('click', () => { renderCallOverlay(); resolve(null); });
+    });
+  }
 
   function teardownCall(notify) {
     if (!call) return;
