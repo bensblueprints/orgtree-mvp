@@ -439,22 +439,25 @@ const roster = [
     await sleep(150);
     ok(!w3.inbox.some(m => m.type === 'fileData'), 'third person cannot fetch DM voice bytes');
 
-    // restart: history-scan fallback still serves bytes for replayed notes
+    // restart: history-scan fallback still serves bytes for replayed notes —
+    // send a note on a storeFile-backed server, restart with the same
+    // storeFile + filesDir, and fetch the note by its fileId
     await s11.stop();
-    const s12 = await createChatServer({ port: PORT, roster, filesDir: fdir, storeFile: path.join(dir4, 'history.json') });
-    // re-seed history through the live server path instead: s11 had no storeFile,
-    // so verify the fallback against s12's own fresh note instead
+    const rstore = path.join(dir4, 'history.json');
+    const s12 = await createChatServer({ port: PORT, roster, filesDir: fdir, storeFile: rstore });
     const w4 = await client(PORT); await sleep(80);
     w4.send({ type: 'hello', personId: 'ada' }); await sleep(80);
     w4.send({ type: 'voice', channel: 'org', data: audio, duration: 1, mime: 'audio/webm', text: 'after restart' });
     await sleep(200);
+    const restartNote = w4.inbox.filter(m => m.type === 'msg' && m.kind === 'voice').pop();
     await s12.stop();
-    const s13 = await createChatServer({ port: PORT, roster, filesDir: fdir, storeFile: path.join(dir4, 'history2.json') });
+    const s13 = await createChatServer({ port: PORT, roster, filesDir: fdir, storeFile: rstore });
     const w5 = await client(PORT); await sleep(80);
     w5.send({ type: 'hello', personId: 'vic' }); await sleep(80);
-    // history2.json has nothing; persistence of history is covered elsewhere —
-    // the contract that matters: a voice note sent before shutdown is fetchable
-    // by its fileId as long as its message survives in history.
+    w5.send({ type: 'fileGet', id: restartNote.fileId });
+    await sleep(150);
+    const rdata = w5.inbox.find(m => m.type === 'fileData' && m.id === restartNote.fileId);
+    eq(Buffer.from(rdata.data, 'base64').toString(), 'fake-opus-audio-bytes', 'voice note fetchable by fileId after server restart');
     await s13.stop();
 
     // retention prune deletes voice bytes

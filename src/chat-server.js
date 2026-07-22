@@ -254,7 +254,13 @@ function createChatServer({
 
   function pushMsg(channel, msg) {
     (history[channel] = history[channel] || []).push(msg);
-    if (history[channel].length > HISTORY_CAP) history[channel] = history[channel].slice(-HISTORY_CAP);
+    if (history[channel].length > HISTORY_CAP) {
+      // Voice notes are messages, not documents: their bytes die with them.
+      for (const m of history[channel].slice(0, history[channel].length - HISTORY_CAP)) {
+        if (m.kind === 'voice' && m.fileId) deleteFileData(m.fileId);
+      }
+      history[channel] = history[channel].slice(-HISTORY_CAP);
+    }
     persist();
   }
 
