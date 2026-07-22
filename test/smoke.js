@@ -355,4 +355,21 @@ console.log('\n— store: company name + timezone/pin fields —');
   eq(n.people[0].pinHash, 'abc123', 'normalize: pin hash preserved');
 }
 
+console.log('\n— normalize: schedule + timeFormat —');
+{
+  const n = store.normalize({
+    people: [{
+      id: 'a', name: 'A',
+      schedule: { mon: [['13:00', '17:00'], ['09:00', '12:00']], wed: [['bad']] },
+      timeFormat: '24h',
+    }, {
+      id: 'b', name: 'B', schedule: 'garbage', timeFormat: 'military',
+    }],
+  });
+  eq(n.people[0].schedule, { mon: [['09:00', '12:00'], ['13:00', '17:00']] }, 'normalize: schedule sorted and validated');
+  eq(n.people[0].timeFormat, '24h', 'normalize: timeFormat 24h preserved');
+  eq(n.people[1].schedule, {}, 'normalize: malformed schedule becomes empty object');
+  eq(n.people[1].timeFormat, '12h', 'normalize: unknown timeFormat falls back to 12h');
+}
+
 console.log(`\nAll good — ${passed} assertions passed.\n`);
