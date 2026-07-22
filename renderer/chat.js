@@ -399,6 +399,8 @@
       if (res && res.ok) { C.notice = 'Saved: ' + res.path; if (C.open) render(); }
       return;
     }
+    if (m.reason === 'voice') return; // playback fetches never sync to disk
+    if (m.channel.startsWith('dm:')) return; // DM files never sync to disk (mirrors autoSyncChannel)
     const res = await window.orgtree.chatSyncWrite(channelLabel(m.channel), m.name, m.data);
     if (res && res.ok) markSynced(m.id);
   }
@@ -892,8 +894,8 @@
       if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; voicePlayingId = null; }
       const audio = new Audio(url);
       voiceAudio = audio; voicePlayingId = fileId;
-      const fill = $('vf-' + CSS.escape(fileId));
-      const time = $('vt-' + CSS.escape(fileId));
+      const fill = $('vf-' + fileId);
+      const time = $('vt-' + fileId);
       audio.ontimeupdate = () => {
         if (time) time.textContent = fmtClock(audio.currentTime) + ' / ' + fmtClock(audio.duration || 0);
         if (fill && audio.duration) fill.style.width = (audio.currentTime / audio.duration * 100).toFixed(1) + '%';
@@ -1144,7 +1146,7 @@
         <span class="chat-hash">${m.channel.startsWith('dm:') ? '@' : '#'}</span>
         <span class="chat-row-main">
           <span class="chat-row-name">${esc(channelLabel(m.channel))} · ${esc(m.fromName)} · ${new Date(m.ts).toLocaleDateString()}</span>
-          <span class="chat-row-sub">${esc(m.kind === 'file' ? '[file] ' + m.fileName : m.kind === 'voice' ? '[voice note] ' + m.text : m.text)}</span>
+          <span class="chat-row-sub">${esc(m.kind === 'file' ? '[file] ' + m.fileName : m.kind === 'voice' ? '[voice note] ' + (m.text || '') : m.text)}</span>
         </span>
       </button>`;
     }
