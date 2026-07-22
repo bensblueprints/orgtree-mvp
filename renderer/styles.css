@@ -636,3 +636,19 @@ body.member .scenario-banner { display: none !important; }
 .sched-remove { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; }
 .sched-remove:hover { color: #d64545; }
 .sched-add { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 2px; }
+
+/* ---------- voice notes ---------- */
+.chat-compose.voice-rec { align-items: center; }
+.chat-voice-dot { width: 10px; height: 10px; border-radius: 50%; background: #d64545; animation: voice-pulse 1s infinite alternate; }
+@keyframes voice-pulse { from { opacity: 1; } to { opacity: 0.3; } }
+.chat-compose.voice-review { flex-direction: column; align-items: stretch; gap: 8px; }
+.chat-compose.voice-review audio { width: 100%; height: 32px; }
+.chat-voice-meta { font-size: 12px; color: var(--muted); }
+.chat-compose.voice-review textarea { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; color: var(--text); padding: 8px 12px; font-size: 13px; font-family: inherit; resize: vertical; }
+.chat-bubble.voice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chat-voice-play { background: var(--accent); color: #fff; border: none; border-radius: 50%; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.chat-voice-play:disabled { opacity: 0.5; cursor: default; }
+.chat-voice-track { position: relative; width: 90px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.chat-voice-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); }
+.chat-voice-time { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.chat-voice-text { width: 100%; font-size: 12px; color: var(--muted); margin-top: 4px; }
