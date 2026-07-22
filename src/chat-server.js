@@ -33,6 +33,7 @@ const TEXT_CAP = 4000;                // chars per message
 // Practical ceiling of the JSON-over-websocket transfer (V8 max string length
 // caps the base64 payload around 512MB). Streaming transfer lifts this later.
 const FILE_CAP = 300 * 1024 * 1024;   // bytes per shared file
+const VOICE_CAP = 8 * 1024 * 1024;     // bytes per voice note (~5 min opus)
 const LIBRARY_CAP = 2000;             // entries overall
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/g;
 
@@ -130,8 +131,11 @@ function createChatServer({
   function pruneChannel(ch) {
     const cutoff = cutoffTs();
     if (!cutoff || !history[ch]) return;
+    const pruned = history[ch].filter(m => m.ts < cutoff);
     const kept = history[ch].filter(m => m.ts >= cutoff);
     if (kept.length !== history[ch].length) {
+      // Voice notes are messages, not documents: their bytes die with them.
+      for (const m of pruned) if (m.kind === 'voice' && m.fileId) deleteFileData(m.fileId);
       if (kept.length) history[ch] = kept; else delete history[ch];
       persist();
     }
@@ -352,6 +356,28 @@ function createChatServer({
         return;
       }
 
+      if (m.type === 'voice') {
+        const channel = String(m.channel || '');
+        if (!channel) return;
+        if (channel.startsWith('dm:') && !dmMembers(channel).includes(info.personId)) return;
+        let buf;
+        try { buf = Buffer.from(String(m.data || ''), 'base64'); } catch (_) { return; }
+        if (!buf.length) return;
+        if (buf.length > VOICE_CAP) { send(ws, { type: 'error', error: 'voice-too-large' }); return; }
+        const id = 'v-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+        try { storeFileData(id, buf); } catch (err) { send(ws, { type: 'error', error: 'file-store-failed' }); return; }
+        const msg = {
+          channel, from: info.personId, fromName: info.name, ts: Date.now(),
+          kind: 'voice', fileId: id,
+          duration: Math.min(Math.max(0, Number(m.duration) || 0), 600),
+          mime: String(m.mime || 'audio/webm').slice(0, 60),
+          text: String(m.text || '').slice(0, TEXT_CAP).trim(),
+        };
+        pushMsg(channel, msg);
+        routeToChannel(channel, { type: 'msg', ...msg });
+        return;
+      }
+
       if (m.type === 'profile') {
         // Employees update their OWN contact details only (see PROFILE_FIELDS).
         const fields = {};
@@ -469,12 +495,25 @@ function createChatServer({
       }
 
       if (m.type === 'fileGet') {
-        const entry = library.find(e => e.id === String(m.id) && e.kind === 'file');
-        if (!entry || !canAccess(info, entry)) { send(ws, { type: 'error', error: 'file-not-found' }); return; }
-        const buf = readFileData(entry.id);
+        const id = String(m.id);
+        const entry = library.find(e => e.id === id && e.kind === 'file');
+        let voiceMsg = null;
+        if (!entry) {
+          for (const msgs of Object.values(history)) {
+            voiceMsg = msgs.find(x => x.kind === 'voice' && x.fileId === id);
+            if (voiceMsg) break;
+          }
+        }
+        if (!entry && !voiceMsg) { send(ws, { type: 'error', error: 'file-not-found' }); return; }
+        if (!canAccess(info, { channel: entry ? entry.channel : voiceMsg.channel })) {
+          send(ws, { type: 'error', error: 'file-not-found' });
+          return;
+        }
+        const buf = readFileData(id);
         if (!buf) { send(ws, { type: 'error', error: 'file-not-found' }); return; }
         send(ws, {
-          type: 'fileData', id: entry.id, name: entry.name, channel: entry.channel,
+          type: 'fileData', id, name: entry ? entry.name : 'voice-note.webm',
+          channel: entry ? entry.channel : voiceMsg.channel,
           reason: m.reason || 'download', data: buf.toString('base64'),
         });
         return;
